@@ -182,6 +182,35 @@ describe('platform admin auth (/admin/auth/*)', () => {
     assert.equal(replay.status, 401);
   });
 
+  test('the replay guard lives in the database, not in process memory (finding 11)', async () => {
+    // It used to be a module-level Map. An attacker who phished password + code
+    // through a real-time proxy and then triggered or waited for a deploy or crash
+    // inside the code's 90-second window replayed it successfully; a second replica
+    // never shared the Map at all. AdminUser.mfaLastStep survives both.
+    const admin = await makeEnrolledAdmin(base);
+    const { res } = await adminLogin(base, admin);
+    assert.equal(res.status, 200);
+
+    const spent = (await raw.adminUser.findUniqueOrThrow({ where: { id: admin.id } })).mfaLastStep;
+    assert.equal(typeof spent, 'number', 'the accepted step was not persisted');
+
+    // Clearing the column is the closest thing to "what an in-memory guard looks
+    // like after a restart". If any process-local copy still existed, the replay
+    // below would stay rejected and this assertion would fail — which is exactly
+    // how the old implementation behaved with the row untouched.
+    await raw.adminUser.update({ where: { id: admin.id }, data: { mfaLastStep: null } });
+    const afterWipe = await req(base, 'POST', '/admin/auth/login', {
+      body: { email: admin.email, password: TEST_PASSWORD, totp: code(admin.secret, STEP_MS) },
+    });
+    assert.equal(afterWipe.status, 200, 'the guard is not the row — something else is holding it');
+
+    // And with the row intact again, the same code is refused.
+    const replay = await req(base, 'POST', '/admin/auth/login', {
+      body: { email: admin.email, password: TEST_PASSWORD, totp: code(admin.secret, STEP_MS) },
+    });
+    assert.equal(replay.status, 401);
+  });
+
   test('an admin who has not enrolled cannot log in at all, only enrol', async () => {
     const admin = await makeAdmin('PLATFORM_SUPPORT');
 

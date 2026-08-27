@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import * as bcrypt from 'bcryptjs';
 import { PlatformSession, signPlatformSession } from './platform-session';
-import { newSecret, verifyTotp } from './totp';
+import { matchTotpStep, newSecret } from './totp';
 
 export const ADMIN_BCRYPT_COST = 12;
 
@@ -51,8 +51,26 @@ export class PlatformAdminAuthService {
   }
 
   /**
+   * Checks the code AND spends it, atomically (finding 11). The replay guard is the
+   * row, not a module-level Map: it survives a restart or a deploy inside the code's
+   * 90-second window, and it is shared by every replica. The conditional updateMany
+   * is the whole guard — two concurrent requests presenting the same code race on the
+   * same row and exactly one of them matches, so `count === 1` means "this request is
+   * the one that spent it".
+   */
+  private async spendTotp(admin: AdminRow, totp: unknown): Promise<boolean> {
+    const step = matchTotpStep(admin, totp);
+    if (step === null) return false;
+    const { count } = await this.prisma.adminUser.updateMany({
+      where: { id: admin.id, OR: [{ mfaLastStep: null }, { mfaLastStep: { lt: step } }] },
+      data: { mfaLastStep: step },
+    });
+    return count === 1;
+  }
+
+  /**
    * §9A.2: MFA is mandatory, so there is exactly one path to a platform session
-   * and it runs through verifyTotp. No `if (mfaEnabled)` branch exists — an
+   * and it runs through spendTotp. No `if (mfaEnabled)` branch exists — an
    * admin who has not enrolled cannot log in at all, they can only enrol.
    */
   async login(
@@ -70,7 +88,7 @@ export class PlatformAdminAuthService {
         message: 'MFA enrolment is required before this account can sign in.',
       });
     }
-    if (!verifyTotp(admin, totp)) {
+    if (!(await this.spendTotp(admin, totp))) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -103,7 +121,10 @@ export class PlatformAdminAuthService {
     const { secret, otpauthUri, encryptedSecret } = newSecret(admin.email);
     await this.prisma.adminUser.update({
       where: { id: admin.id },
-      data: { mfaSecret: encryptedSecret },
+      // mfaLastStep is cleared with the secret: steps spent against the old one
+      // say nothing about the new one, and leaving it could reject a valid
+      // confirmation code landing in the same step.
+      data: { mfaSecret: encryptedSecret, mfaLastStep: null },
     });
     return { secret, otpauthUri };
   }
@@ -114,7 +135,7 @@ export class PlatformAdminAuthService {
     if (admin.mfaEnabled) {
       throw new ForbiddenException('MFA is already enrolled for this account.');
     }
-    if (!verifyTotp(admin, totp)) {
+    if (!(await this.spendTotp(admin, totp))) {
       throw new UnauthorizedException('Invalid code');
     }
     await this.prisma.adminUser.update({

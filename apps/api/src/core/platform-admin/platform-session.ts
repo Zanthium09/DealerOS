@@ -25,8 +25,13 @@ export interface PlatformSession {
 function secret(): Uint8Array {
   const raw = process.env.ADMIN_SESSION_SECRET;
   if (!raw) {
-    // Fail closed: the dev fallback is opt-in, never implied by NODE_ENV.
-    // A deploy that forgets NODE_ENV must NOT silently use a secret published in git.
+    // Two independent refusals (finding 7): production never gets the fallback
+    // whatever ALLOW_DEV_SECRETS says, and without ALLOW_DEV_SECRETS it is refused
+    // whatever NODE_ENV says. Either alone would have shipped this secret, which is
+    // published in this repository, as a working PLATFORM admin signing key.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ADMIN_SESSION_SECRET is required in production. Refusing to start.');
+    }
     if (process.env.ALLOW_DEV_SECRETS !== '1') {
       throw new Error(
         'ADMIN_SESSION_SECRET is required. Set it, or set ALLOW_DEV_SECRETS=1 for local development only.',

@@ -33,8 +33,12 @@ export type AdminTotpIdentity = {
 function mfaKey(): Buffer {
   const raw = process.env.ADMIN_MFA_KEY;
   if (!raw) {
-    // Fail closed: the dev fallback is opt-in, never implied by NODE_ENV.
-    // A deploy that forgets NODE_ENV must NOT silently use a secret published in git.
+    // Two independent refusals (finding 7): production never gets the fallback
+    // whatever ALLOW_DEV_SECRETS says, and without ALLOW_DEV_SECRETS it is refused
+    // whatever NODE_ENV says.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ADMIN_MFA_KEY is required in production. Refusing to start.');
+    }
     if (process.env.ALLOW_DEV_SECRETS !== '1') {
       throw new Error(
         'ADMIN_MFA_KEY is required. Set it, or set ALLOW_DEV_SECRETS=1 for local development only.',
@@ -102,28 +106,34 @@ export function newSecret(email: string): {
   };
 }
 
-// ponytail: single-process replay guard — the last accepted step per admin, in memory.
-// Ceiling: a second API replica has its own map, so a code replayed against the other
-// replica within its 90-second window would pass. Move to Redis (already in §2's stack)
-// when the API runs more than one instance.
-const lastAcceptedStep = new Map<string, number>();
-
 /**
  * Constant-time TOTP check across the accepted window. otpauth's own `validate`
- * short-circuits; this does not. A code is accepted at most once per admin: replaying
- * the same code inside its validity window is rejected.
+ * short-circuits; this does not. Returns the matched step, or null.
+ *
+ * The step is returned rather than a boolean because the replay guard lives on
+ * AdminUser.mfaLastStep (finding 11), not in this module. It used to be a
+ * module-level Map, which meant an attacker who phished password + code through a
+ * real-time proxy and then triggered or waited for a deploy or crash inside the
+ * 90-second window could replay the code successfully — and a second API replica
+ * never shared the map at all. Spending the step is the caller's job because only
+ * the caller has the database, and doing it there makes it one atomic conditional
+ * UPDATE instead of a read-then-write two admins can both win.
+ *
+ * Named `matchTotpStep`, not `verifyTotp`: a boolean-shaped call site left on a
+ * number-returning function would treat step 0 as a failure and every other step as
+ * a pass. Renaming forces every caller to be looked at.
  */
-export function verifyTotp(admin: AdminTotpIdentity, code: unknown): boolean {
-  if (!admin.mfaSecret) return false;
-  if (typeof code !== 'string') return false;
+export function matchTotpStep(admin: AdminTotpIdentity, code: unknown): number | null {
+  if (!admin.mfaSecret) return null;
+  if (typeof code !== 'string') return null;
   const candidate = code.replace(/\s+/g, '');
-  if (!/^\d{6}$/.test(candidate)) return false;
+  if (!/^\d{6}$/.test(candidate)) return null;
 
   let totp: OTPAuth.TOTP;
   try {
     totp = totpFor(decryptSecret(admin.mfaSecret), admin.email);
   } catch {
-    return false; // wrong key, tampered ciphertext, or a pre-v1 value
+    return null; // wrong key, tampered ciphertext, or a pre-v1 value
   }
 
   const provided = Buffer.from(candidate, 'utf8');
@@ -136,11 +146,5 @@ export function verifyTotp(admin: AdminTotpIdentity, code: unknown): boolean {
     // Lengths are both DIGITS by construction, so timingSafeEqual cannot throw.
     if (timingSafeEqual(expected, provided)) matchedStep = currentStep + step;
   }
-  if (matchedStep === null) return false;
-
-  const seen = lastAcceptedStep.get(admin.id);
-  if (seen !== undefined && matchedStep <= seen) return false; // replay
-  if (lastAcceptedStep.size > 10_000) lastAcceptedStep.clear();
-  lastAcceptedStep.set(admin.id, matchedStep);
-  return true;
+  return matchedStep;
 }

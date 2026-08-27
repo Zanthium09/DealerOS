@@ -728,10 +728,31 @@ auto-suspension thresholds, billing.
 pnpm install
 docker compose up -d          # Postgres :5433, Redis :6380
 cp .env.example .env          # then set the secrets — see the note at the top of it
-npx prisma migrate deploy     # or `pnpm prisma:migrate` while changing the schema
+pnpm prisma:deploy            # or `pnpm prisma:migrate` while changing the schema
 pnpm db:seed                  # one Organization, one OWNER User, one PLATFORM_ADMIN
 pnpm test                     # the whole suite
 ```
+
+**Two database roles.** `DATABASE_URL` is `dealeros_app`: not the table owner, not a
+superuser. `MIGRATE_DATABASE_URL` is `dealeros`, the owner, and only the two prisma
+scripts above use it — which is why they are `pnpm prisma:deploy` / `pnpm
+prisma:migrate` and not `npx prisma migrate deploy` (`schema.prisma` reads
+`DATABASE_URL`, so `apps/api/scripts/migrate.mjs` hands it the owner URL instead).
+
+The app used to connect as the owner, which the compose image also makes a
+superuser. From that role the append-only triggers on `AuditEvent` and `ConsentLog`
+were decoration — `ALTER TABLE … DISABLE TRIGGER`, `SET session_replication_role =
+'replica'` and `DROP TRIGGER` all worked, and `rolbypassrls` was true, so the
+Postgres RLS §1.3 offers as the alternative would have been just as void.
+`apps/api/test/audit/db-role.test.ts` is the standing proof that it is not any more.
+
+No extra setup step: migration `20260828120000_app_role_least_privilege` creates
+`dealeros_app` if it is missing, so local dev stays one `docker compose up -d` and
+the throwaway test database gets the same split for free. **In production, create
+`dealeros_app` yourself with a real password before the first deploy** — the
+migration's guarded `CREATE ROLE` then does nothing and only the grants apply. New
+tables get the app role's grants automatically (`ALTER DEFAULT PRIVILEGES`); a new
+append-only table needs its own `REVOKE UPDATE, DELETE, TRUNCATE`.
 
 `pnpm test` is the only test command. It compiles `apps/api` (tests included) and then
 runs `apps/api/test/run.mjs`, which creates a throwaway database from
@@ -745,4 +766,12 @@ type-stripped because Nest's DI needs `emitDecoratorMetadata`, which
 
 The seeded platform admin has no MFA enrolled: enrol through `/admin/auth/mfa/enrol`
 then `/admin/auth/mfa/confirm` with a real authenticator (§9A.2 — a seeded second
-factor would be a shared one).
+factor would be a shared one). Note that `/mfa/enrol` is gated on the password
+alone: an attacker holding a stolen password for an admin who has never enrolled can
+enrol their own authenticator. §9A.2's "MFA is mandatory" is mandatory *after*
+enrolment. **Enrol the seeded admin before the host is reachable by anyone else.**
+
+`ALLOW_DEV_SECRETS=1` prints a banner at every boot. It is the single switch that
+enables the dev secret fallbacks and drops `Secure` from the session cookies; with
+`NODE_ENV=production` the fallbacks are refused regardless, and the process exits at
+boot rather than at the first login (`assertSecretsUsable` in `apps/api/src/main.ts`).

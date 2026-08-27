@@ -1,6 +1,13 @@
 services:
   postgres:
     # postgres:16 ships pg_trgm in contrib; the extension is enabled by migration (§2).
+    #
+    # POSTGRES_USER is the OWNER/DDL role and a superuser — `prisma migrate` only
+    # (MIGRATE_DATABASE_URL). The API connects as `dealeros_app`, a non-owner,
+    # non-superuser role created by migration 20260828120000 with UPDATE/DELETE/
+    # TRUNCATE revoked on AuditEvent and ConsentLog (finding 6). Creating it in the
+    # migration rather than an initdb script keeps local setup one `docker compose
+    # up -d` and gives the throwaway test database the same split for free.
     image: postgres:16
     environment:
       POSTGRES_USER: ${POSTGRES_USER}

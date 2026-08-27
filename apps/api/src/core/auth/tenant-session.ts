@@ -28,8 +28,15 @@ export interface TenantSession {
 function secret(): Uint8Array {
   const raw = process.env.AUTH_SESSION_SECRET;
   if (!raw) {
-    // Fail closed: the dev fallback is opt-in, never implied by NODE_ENV.
-    // A deploy that forgets NODE_ENV must NOT silently use a secret published in git.
+    // Two independent refusals, because .env.example promises both and an operator
+    // reads that file, not this one (finding 7).
+    //   1. Production never gets the fallback, whatever ALLOW_DEV_SECRETS says —
+    //      a copied .env cannot carry the dev switch into production.
+    //   2. Absent ALLOW_DEV_SECRETS the fallback is refused whatever NODE_ENV says,
+    //      so a deploy that forgets NODE_ENV still fails closed.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('AUTH_SESSION_SECRET is required in production. Refusing to start.');
+    }
     if (process.env.ALLOW_DEV_SECRETS !== '1') {
       throw new Error(
         'AUTH_SESSION_SECRET is required. Set it, or set ALLOW_DEV_SECRETS=1 for local development only.',

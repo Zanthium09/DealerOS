@@ -8,6 +8,13 @@
 // The admin is seeded WITHOUT MFA enrolled on purpose (§9A.2): enrolment is a
 // two-step flow with a real authenticator, and a seeded second factor would be a
 // shared one. First run: POST /admin/auth/mfa/enrol, then /mfa/confirm.
+//
+// Which is also a window: /mfa/enrol is gated on the password alone, so whoever
+// reaches it first enrols the authenticator — §9A.2's mandatory MFA only becomes
+// mandatory once someone has enrolled. Do it before the host is reachable.
+//
+// Runs as DATABASE_URL, i.e. the dealeros_app role: no DDL, and no UPDATE or DELETE
+// on AuditEvent or ConsentLog. Seeding needs none of those.
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
@@ -61,6 +68,10 @@ try {
   console.log(
     `platform admin ${admin.email}  -> POST /admin/auth/mfa/enrol, then /admin/auth/login`,
   );
+  if (!admin.mfaEnabled) {
+    console.log('  ^ no second factor yet. Anyone who reaches /mfa/enrol with this');
+    console.log('    password enrols their own authenticator. Enrol it now.');
+  }
 } finally {
   await prisma.$disconnect();
 }

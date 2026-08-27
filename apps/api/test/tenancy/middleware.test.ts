@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import { SignJWT } from 'jose';
 import { TenancyMiddleware } from '../../src/core/tenancy/tenancy.middleware';
 import { getOrgId } from '../../src/core/tenancy/tenancy';
 import { TENANT_COOKIE, signTenantSession } from '../../src/core/auth/tenant-session';
@@ -43,15 +44,57 @@ describe('tenancy middleware takes the org from the session only (§9A.1)', () =
     assert.equal(seen, 'org-real');
   });
 
-  test('a forged or expired token yields no context, not a chosen one', async () => {
+  // Finding 10: this test used to sign its "forged" token with signTenantSession —
+  // i.e. with the CORRECT secret — and never built an expired one at all. The only
+  // thing actually rejected was the string 'not.a.jwt'. These are the real articles:
+  // a token an attacker could mint with their own key, and one whose exp has passed.
+  // Both are built with jose directly, so nothing here can accidentally reach for
+  // the server's key again.
+  const forge = (secretText: string, expiresAt: string | number) =>
+    new SignJWT({ typ: 'tenant', org: 'org-victim', role: 'OWNER' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u1')
+      .setIssuer('dealeros')
+      .setAudience('dealeros:tenant')
+      .setIssuedAt(Math.floor(Date.now() / 1000) - 3600)
+      .setExpirationTime(expiresAt)
+      .sign(new TextEncoder().encode(secretText));
+
+  test('a garbage token yields no context', async () => {
     assert.equal(await contextFor({ cookie: `${TENANT_COOKIE}=not.a.jwt` }), undefined);
-    const wrongSecret = await signTenantSession({
-      userId: 'u1',
-      organizationId: 'org-victim',
-      role: 'OWNER',
-    });
-    // Same token under the admin cookie name: the middleware does not read that cookie.
-    assert.equal(await contextFor({ cookie: `dos_admin_session=${wrongSecret}` }), undefined);
+  });
+
+  test('a token signed with a different secret yields no context', async () => {
+    // Structurally perfect: right claims, right issuer, right audience, unexpired.
+    // Only the signing key differs, which is the entire point of §9A.2's separation.
+    const token = await forge('an-attackers-own-secret-0123456789abcdef', '15m');
+    assert.equal(await contextFor({ cookie: `${TENANT_COOKIE}=${token}` }), undefined);
+  });
+
+  test('the admin session secret does not verify a tenant token either', async () => {
+    const token = await forge(process.env.ADMIN_SESSION_SECRET as string, '15m');
+    assert.equal(await contextFor({ cookie: `${TENANT_COOKIE}=${token}` }), undefined);
+  });
+
+  test('an expired token yields no context', async () => {
+    // Correct secret, correct everything — exp is 60 seconds in the past. TTL is the
+    // only revocation this system has (tenant-session.ts), so this is the assertion
+    // that TTL means anything.
+    const token = await forge(
+      process.env.AUTH_SESSION_SECRET as string,
+      Math.floor(Date.now() / 1000) - 60,
+    );
+    assert.equal(await contextFor({ cookie: `${TENANT_COOKIE}=${token}` }), undefined);
+    // And the same token, unexpired, WOULD have set the context — so the rejection
+    // above is exp doing the work, not some other claim being wrong.
+    const live = await forge(process.env.AUTH_SESSION_SECRET as string, '15m');
+    assert.equal(await contextFor({ cookie: `${TENANT_COOKIE}=${live}` }), 'org-victim');
+  });
+
+  test('a valid token under the admin cookie name yields no context', async () => {
+    const token = await session('org-real');
+    // The middleware does not read dos_admin_session.
+    assert.equal(await contextFor({ cookie: `dos_admin_session=${token}` }), undefined);
   });
 
   test('the header path is gone from the source, not merely unused', () => {

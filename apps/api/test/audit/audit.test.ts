@@ -9,7 +9,7 @@ import '../support';
 import assert from 'node:assert/strict';
 import { before, after, describe, test } from 'node:test';
 import { PrismaClient } from '@prisma/client';
-import { runAsPlatformAdmin, withTenancy } from '../../src/core/tenancy/tenancy';
+import { runAsPlatformAdmin, runWithOrg, withTenancy } from '../../src/core/tenancy/tenancy';
 import { AuditAction } from '../../src/core/audit/audit.actions';
 import { AuditService } from '../../src/core/audit/audit.service';
 
@@ -43,8 +43,39 @@ after(async () => {
 });
 
 describe('AuditService.record', () => {
+  test('needs a context — the trail is not writable from nowhere (§1.3)', async () => {
+    await assert.rejects(
+      audit.record({
+        actorType: 'USER',
+        actorId: 'audit-user',
+        organizationId: ORG,
+        entityType: 'Dealer',
+        entityId: DEALER,
+        action: AuditAction.PIPELINE_STAGE_CHANGED,
+      }),
+      /tenancy/i,
+    );
+  });
+
+  test('an org context cannot write another org row (§9A.3)', async () => {
+    await assert.rejects(
+      runWithOrg(ORG, async () =>
+        audit.record({
+          actorType: 'USER',
+          actorId: 'audit-user',
+          organizationId: OTHER_ORG,
+          entityType: 'Dealer',
+          entityId: 'forged',
+          action: AuditAction.DRAFT_APPROVED,
+        }),
+      ),
+      /tenancy/i,
+    );
+    assert.equal(await raw.auditEvent.count({ where: { entityId: 'forged' } }), 0);
+  });
+
   test('round-trips every field', async () => {
-    const written = await audit.record({
+    const written = await runWithOrg(ORG, async () => audit.record({
       actorType: 'USER',
       actorId: 'audit-user',
       organizationId: ORG,
@@ -52,7 +83,7 @@ describe('AuditService.record', () => {
       entityId: DEALER,
       action: AuditAction.PIPELINE_STAGE_CHANGED,
       metadata: { from: 'NEW', to: 'CONTACTED' },
-    });
+    }));
 
     const read = await raw.auditEvent.findUniqueOrThrow({ where: { id: written.id } });
     assert.equal(read.actorType, 'USER');
@@ -66,14 +97,16 @@ describe('AuditService.record', () => {
   });
 
   test('records a platform-wide admin action with organizationId null (§9A.3)', async () => {
-    const written = await audit.record({
-      actorType: 'ADMIN',
-      actorId: OTHER_ADMIN,
-      organizationId: null,
-      entityType: 'audit-platform',
-      entityId: 'metrics',
-      action: AuditAction.VIEWED_ORG_DATA,
-    });
+    const written = await runAsPlatformAdmin(async () =>
+      audit.record({
+        actorType: 'ADMIN',
+        actorId: OTHER_ADMIN,
+        organizationId: null,
+        entityType: 'audit-platform',
+        entityId: 'metrics',
+        action: AuditAction.VIEWED_ORG_DATA,
+      }),
+    );
     assert.equal(
       (await raw.auditEvent.findUniqueOrThrow({ where: { id: written.id } })).organizationId,
       null,
@@ -85,16 +118,18 @@ describe('AuditService.record', () => {
     await assert.rejects(
       raw.$transaction(async (tx) => {
         id = (
-          await audit.record(
-            {
-              actorType: 'SYSTEM',
-              actorId: null,
-              organizationId: ORG,
-              entityType: 'Dealer',
-              entityId: DEALER,
-              action: AuditAction.PIPELINE_STAGE_CHANGED,
-            },
-            tx,
+          await runWithOrg(ORG, async () =>
+            audit.record(
+              {
+                actorType: 'SYSTEM',
+                actorId: null,
+                organizationId: ORG,
+                entityType: 'Dealer',
+                entityId: DEALER,
+                action: AuditAction.PIPELINE_STAGE_CHANGED,
+              },
+              tx,
+            ),
           )
         ).id;
         throw new Error('caller failed after the audit write');
@@ -106,14 +141,16 @@ describe('AuditService.record', () => {
 
 describe('AuditEvent immutability', () => {
   const seed = () =>
-    audit.record({
-      actorType: 'ADMIN',
-      actorId: OTHER_ADMIN,
-      organizationId: ORG,
-      entityType: 'Organization',
-      entityId: ORG,
-      action: AuditAction.ORGANIZATION_SUSPENDED,
-    });
+    runWithOrg(ORG, async () =>
+      audit.record({
+        actorType: 'ADMIN',
+        actorId: OTHER_ADMIN,
+        organizationId: ORG,
+        entityType: 'Organization',
+        entityId: ORG,
+        action: AuditAction.ORGANIZATION_SUSPENDED,
+      }),
+    );
 
   test('rejects UPDATE via Prisma and via raw SQL', async () => {
     const { id } = await seed();
@@ -187,7 +224,45 @@ describe('ConsentLog immutability', () => {
     await assert.rejects(raw.$executeRawUnsafe('TRUNCATE "ConsentLog"'), /append-only/);
   });
 
-  test('a second row supersedes the first instead of overwriting it (§10.2)', async () => {
+  // Consent is per channel (§4, §10.2, §13). This file used to claim §10.2 while
+  // writing two EMAIL rows — which proves ordering, not independence. Nothing in the
+  // suite touched WHATSAPP or CALL at all, so an email opt-out silently suppressing
+  // WhatsApp would have shipped green.
+  test('an EMAIL opt-out does not suppress WHATSAPP or CALL (§10.2, §13)', async () => {
+    const dealerId = 'audit-dealer-channels';
+    await raw.dealer.create({
+      data: { id: dealerId, organizationId: ORG, businessName: 'Channel Co', source: 'MANUAL' },
+    });
+    for (const channel of ['EMAIL', 'WHATSAPP', 'CALL'] as const) {
+      await raw.consentLog.create({
+        data: { organizationId: ORG, dealerId, channel, state: 'OPTED_IN', source: 'IMPORT_DEFAULT' },
+      });
+    }
+    // The opt-out arrives on EMAIL only.
+    await raw.consentLog.create({
+      data: {
+        organizationId: ORG,
+        dealerId,
+        channel: 'EMAIL',
+        state: 'OPTED_OUT',
+        source: 'EXPLICIT_UNSUBSCRIBE',
+      },
+    });
+
+    // Current state = most recent row per (dealerId, channel).
+    const rows = await raw.consentLog.findMany({
+      where: { dealerId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const current = new Map(rows.map((r) => [r.channel, r.state]));
+    assert.equal(current.get('EMAIL'), 'OPTED_OUT');
+    assert.equal(current.get('WHATSAPP'), 'OPTED_IN');
+    assert.equal(current.get('CALL'), 'OPTED_IN');
+    // The EMAIL opt-in is still in the history — the trail is append-only, not replaced.
+    assert.equal(rows.filter((r) => r.channel === 'EMAIL').length, 2);
+  });
+
+  test('a second row supersedes the first instead of overwriting it (§4, append-only)', async () => {
     const first = await seed();
     const second = await raw.consentLog.create({
       data: {
@@ -209,32 +284,49 @@ describe('ConsentLog immutability', () => {
 
 describe('AuditService.find', () => {
   before(async () => {
-    await audit.record({
-      actorType: 'ADMIN',
-      actorId: ADMIN,
-      organizationId: OTHER_ORG,
-      entityType: 'Dealer',
-      entityId: 'audit-viewed',
-      action: AuditAction.VIEWED_ORG_DATA,
-    });
-    await audit.record({
-      actorType: 'ADMIN',
-      actorId: ADMIN,
-      organizationId: ORG,
-      entityType: 'Dealer',
-      entityId: 'audit-viewed',
-      action: AuditAction.VIEWED_ORG_DATA,
+    await runAsPlatformAdmin(async () => {
+      await audit.record({
+        actorType: 'ADMIN',
+        actorId: ADMIN,
+        organizationId: OTHER_ORG,
+        entityType: 'Dealer',
+        entityId: 'audit-viewed',
+        action: AuditAction.VIEWED_ORG_DATA,
+      });
+      await audit.record({
+        actorType: 'ADMIN',
+        actorId: ADMIN,
+        organizationId: ORG,
+        entityType: 'Dealer',
+        entityId: 'audit-viewed',
+        action: AuditAction.VIEWED_ORG_DATA,
+      });
     });
   });
 
-  test('scopes by organization', async () => {
-    const { events } = await audit.find({ organizationId: OTHER_ORG });
+  // This used to assert the leak: it called find({ organizationId: OTHER_ORG }) with no
+  // context at all and asserted rows came back — which any implementation with zero
+  // scoping would also pass. A tenant may read its OWN trail and nothing else.
+  test('a tenant context reads its own org and is refused another', async () => {
+    const { events } = await runWithOrg(ORG, async () => audit.find({ organizationId: ORG }));
     assert.ok(events.length > 0);
-    assert.ok(events.every((e) => e.organizationId === OTHER_ORG));
+    assert.ok(events.every((e) => e.organizationId === ORG));
+
+    await assert.rejects(
+      runWithOrg(ORG, async () => audit.find({ organizationId: OTHER_ORG })),
+      /refusing/i,
+    );
+    // Not even by omitting the filter, and not by asking for the platform-wide rows.
+    await assert.rejects(runWithOrg(ORG, async () => audit.find({})), /explicit where.organizationId/);
+    await assert.rejects(runWithOrg(ORG, async () => audit.find({ organizationId: null })), /refusing/i);
+    // And with no context at all, nothing is readable (§1.3).
+    await assert.rejects(audit.find({ organizationId: OTHER_ORG }), /tenancy/i);
   });
 
   test('selects platform-wide events with organizationId null', async () => {
-    const { events } = await audit.find({ organizationId: null, entityType: 'audit-platform' });
+    const { events } = await runAsPlatformAdmin(async () =>
+      audit.find({ organizationId: null, entityType: 'audit-platform' }),
+    );
     assert.ok(events.length > 0);
     assert.ok(events.every((e) => e.organizationId === null));
   });

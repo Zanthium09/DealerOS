@@ -24,6 +24,8 @@ const ORG_A = 'test-org-a';
 const ORG_B = 'test-org-b';
 const DEALER_A = 'test-dealer-a';
 const DEALER_B = 'test-dealer-b';
+const USER_A = 'test-user-a';
+const USER_B = 'test-user-b';
 const ADMIN = 'test-admin-user';
 
 // No cleanup anywhere in this file: the database is thrown away at the end of the run
@@ -40,6 +42,26 @@ before(async () => {
     data: [
       { id: DEALER_A, organizationId: ORG_A, businessName: 'A Traders', source: 'MANUAL' },
       { id: DEALER_B, organizationId: ORG_B, businessName: 'B Traders', source: 'MANUAL' },
+    ],
+  });
+  await raw.user.createMany({
+    data: [
+      {
+        id: USER_A,
+        organizationId: ORG_A,
+        email: 'owner-a@test.local',
+        name: 'Owner A',
+        passwordHash: 'hash-a',
+        role: 'OWNER',
+      },
+      {
+        id: USER_B,
+        organizationId: ORG_B,
+        email: 'owner-b@test.local',
+        name: 'Victim Owner zzzx',
+        passwordHash: 'hash-b-secret',
+        role: 'OWNER',
+      },
     ],
   });
   await raw.adminUser.create({
@@ -230,15 +252,225 @@ describe('writes are forced into the context org', () => {
   });
 
   test('upsert is scoped on both branches', async () => {
-    const up = await runWithOrg(ORG_A, async () =>
+    // Create branch.
+    const created = await runWithOrg(ORG_A, async () =>
       await db.dealer.upsert({
         where: { id: 'test-upsert-1' },
         create: { id: 'test-upsert-1', organizationId: ORG_B, businessName: 'U', source: 'MANUAL' } as never,
         update: { businessName: 'U2' },
       }),
     );
-    assert.equal(up.organizationId, ORG_A);
+    assert.equal(created.organizationId, ORG_A);
+    assert.equal(created.businessName, 'U');
+
+    // Update branch — the row now exists, so this second call takes it. A foreign
+    // organizationId in `update` must not move the row out of the context org either.
+    const updated = await runWithOrg(ORG_A, async () =>
+      await db.dealer.upsert({
+        where: { id: 'test-upsert-1' },
+        create: { id: 'test-upsert-1', organizationId: ORG_A, businessName: 'U', source: 'MANUAL' },
+        update: { businessName: 'U2', organizationId: ORG_B } as never,
+      }),
+    );
+    assert.equal(updated.businessName, 'U2');
+    assert.equal(updated.organizationId, ORG_A);
+    assert.equal(
+      (await raw.dealer.findUniqueOrThrow({ where: { id: 'test-upsert-1' } })).organizationId,
+      ORG_A,
+    );
+
+    // And an upsert aimed at another org's row is refused outright, both branches.
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.dealer.upsert({
+            where: { id: DEALER_B },
+            create: { id: DEALER_B, organizationId: ORG_B, businessName: 'X', source: 'MANUAL' },
+            update: { businessName: 'HACKED' },
+          }),
+        ),
+    );
+    assert.equal(
+      (await raw.dealer.findUniqueOrThrow({ where: { id: DEALER_B } })).businessName,
+      'B Traders',
+    );
+
     await raw.dealer.delete({ where: { id: 'test-upsert-1' } });
+  });
+});
+
+// §1.3. $allOperations only ever sees the TOP-LEVEL args, so everything nested inside
+// data/where used to run completely unscoped: a nested connect could steal another
+// org's row outright, and a nested create could plant one inside another org. Both are
+// closed twice over — composite (organizationId, id) foreign keys in the database, and
+// the recursive check in scope() — so these must fail even if one layer is removed.
+describe('nested writes cannot cross an org boundary', () => {
+  test('FINDING 1: nested connect cannot steal another org user', async () => {
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.organization.update({
+            where: { id: ORG_A },
+            data: { users: { connect: { id: USER_B } } },
+          }),
+        ),
+      /tenancy/i,
+    );
+    const victim = await raw.user.findUniqueOrThrow({ where: { id: USER_B } });
+    assert.equal(victim.organizationId, ORG_B);
+  });
+
+  test('FINDING 1: nested connect cannot steal another org dealer', async () => {
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.organization.update({
+            where: { id: ORG_A },
+            data: { dealers: { connect: { id: DEALER_B } } },
+          }),
+        ),
+      /tenancy/i,
+    );
+    assert.equal(
+      (await raw.dealer.findUniqueOrThrow({ where: { id: DEALER_B } })).organizationId,
+      ORG_B,
+    );
+    // Org B still sees its own dealer through its own scoped client.
+    const bRows = await runWithOrg(ORG_B, async () => await db.dealer.findMany());
+    assert.ok(bRows.some((d) => d.id === DEALER_B));
+  });
+
+  test('FINDING 1: nested set/disconnect cannot move another org row', async () => {
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.organization.update({
+            where: { id: ORG_A },
+            data: { users: { set: [{ id: USER_B }] } },
+          }),
+        ),
+      /tenancy/i,
+    );
+    assert.equal(
+      (await raw.user.findUniqueOrThrow({ where: { id: USER_B } })).organizationId,
+      ORG_B,
+    );
+  });
+
+  test('FINDING 2: a dealer cannot be assigned a salesman from another org', async () => {
+    await assert.rejects(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.dealer.update({ where: { id: DEALER_A }, data: { assignedSalesmanId: USER_B } }),
+      ),
+    );
+    await assert.rejects(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.dealer.update({
+          where: { id: DEALER_A },
+          data: { assignedSalesman: { connect: { id: USER_B } } },
+        }),
+      ),
+    );
+    assert.equal(
+      (await raw.dealer.findUniqueOrThrow({ where: { id: DEALER_A } })).assignedSalesmanId,
+      null,
+    );
+  });
+
+  test('FINDING 2: relation traversal yields no other-org user, and no oracle', async () => {
+    const found = await runWithOrg(ORG_A, async () =>
+      await db.dealer.findFirst({
+        where: { id: DEALER_A },
+        select: { assignedSalesman: { select: { email: true, passwordHash: true } } },
+      }),
+    );
+    assert.equal(found?.assignedSalesman, null);
+
+    // Blind oracle: filtering dealers through the relation must not probe org B's users.
+    const probed = await runWithOrg(ORG_A, async () =>
+      await db.dealer.findMany({ where: { assignedSalesman: { name: { contains: 'zzzx' } } } }),
+    );
+    assert.deepEqual(probed, []);
+  });
+
+  test('FINDING 2: an in-org salesman still assigns and traverses', async () => {
+    await runWithOrg(ORG_A, async () =>
+      await db.dealer.update({ where: { id: DEALER_A }, data: { assignedSalesmanId: USER_A } }),
+    );
+    const found = await runWithOrg(ORG_A, async () =>
+      await db.dealer.findFirst({
+        where: { id: DEALER_A },
+        select: { assignedSalesman: { select: { id: true } } },
+      }),
+    );
+    assert.equal(found?.assignedSalesman?.id, USER_A);
+    await runWithOrg(ORG_A, async () =>
+      await db.dealer.update({ where: { id: DEALER_A }, data: { assignedSalesmanId: null } }),
+    );
+  });
+
+  test('FINDING 5: nested create cannot plant a row in another org', async () => {
+    await assert.rejects(
+      () =>
+      runWithOrg(ORG_A, async () =>
+        await db.dealer.create({
+          data: {
+            businessName: 'poison',
+            source: 'MANUAL',
+            phones: { create: [{ organizationId: ORG_B, raw: 'PLANTED-BY-ORG-A' }] },
+          } as never,
+        }),
+      ),
+      /tenancy/i,
+    );
+    assert.equal(await raw.dealerPhone.count({ where: { raw: 'PLANTED-BY-ORG-A' } }), 0);
+    const bPhones = await runWithOrg(ORG_B, async () => await db.dealerPhone.findMany());
+    assert.deepEqual(bPhones, []);
+    await raw.dealer.deleteMany({ where: { businessName: 'poison' } });
+  });
+
+  test('FINDING 5: nested connectOrCreate is checked too', async () => {
+    await assert.rejects(
+      () =>
+      runWithOrg(ORG_A, async () =>
+        await db.dealer.create({
+          data: {
+            businessName: 'poison-coc',
+            source: 'MANUAL',
+            phones: {
+              connectOrCreate: {
+                where: { id: 'test-phone-coc' },
+                create: { id: 'test-phone-coc', organizationId: ORG_B, raw: 'PLANTED-COC' },
+              },
+            },
+          } as never,
+        }),
+      ),
+      /tenancy/i,
+    );
+    assert.equal(await raw.dealerPhone.count({ where: { raw: 'PLANTED-COC' } }), 0);
+    await raw.dealer.deleteMany({ where: { businessName: 'poison-coc' } });
+  });
+
+  // The composite key has a second effect worth pinning: organizationId is now part of
+  // the parent relation, so a nested create cannot even NAME an org — it inherits the
+  // parent's. The §5.1 dedup key and §7 send target can no longer be planted at all.
+  test('a nested create in the context org still works, inheriting the org', async () => {
+    const created = await runWithOrg(ORG_A, async () =>
+      await db.dealer.create({
+        data: {
+          organizationId: ORG_A,
+          businessName: 'legit-nested',
+          source: 'MANUAL',
+          phones: { create: [{ raw: '+91 99999 00000' }] },
+        },
+        include: { phones: true },
+      }),
+    );
+    assert.equal(created.organizationId, ORG_A);
+    assert.equal(created.phones.length, 1);
+    assert.equal(created.phones[0].organizationId, ORG_A);
+    await raw.dealer.delete({ where: { id: created.id } });
   });
 });
 
@@ -304,8 +536,8 @@ describe('context plumbing', () => {
 // AuditService.record() passes organizationId explicitly and a platform-wide row's
 // null must survive being written from inside a tenant request.
 describe('AuditEvent is exempt from injection (§9A.3)', () => {
-  test('a platform-wide row is written and read back while a tenant context is active', async () => {
-    const written = await runWithOrg(ORG_A, async () =>
+  test('a platform context writes a platform-wide row, and it is not rewritten', async () => {
+    const written = await runAsPlatformAdmin(async () =>
       await db.auditEvent.create({
         data: {
           organizationId: null,
@@ -317,13 +549,126 @@ describe('AuditEvent is exempt from injection (§9A.3)', () => {
         },
       }),
     );
-    // Not rewritten to ORG_A — that is the whole point.
+    // Not rewritten to an org — that is the whole point.
     assert.equal(written.organizationId, null);
 
-    const read = await runWithOrg(ORG_A, async () =>
+    const read = await runAsPlatformAdmin(async () =>
       await db.auditEvent.findMany({ where: { organizationId: null, entityId: 'tenancy-metrics' } }),
     );
     assert.deepEqual(read.map((e) => e.id), [written.id]);
+  });
+
+  test('an org context writes only its own org rows', async () => {
+    const own = await runWithOrg(ORG_A, async () =>
+      await db.auditEvent.create({
+        data: {
+          organizationId: ORG_A,
+          actorType: 'USER',
+          actorId: USER_A,
+          entityType: 'Dealer',
+          entityId: DEALER_A,
+          action: 'PIPELINE_STAGE_CHANGED',
+        },
+      }),
+    );
+    assert.equal(own.organizationId, ORG_A);
+  });
+
+  // FINDING 4 — an immutable, undeletable row forged against another tenant is the
+  // worst kind of write this table can take (§9, §9A.3).
+  test('FINDING 4: an org context cannot forge a row attributed to another org', async () => {
+    const forged = {
+      organizationId: ORG_B,
+      actorType: 'USER' as const,
+      actorId: 'test-user-b-owner',
+      entityType: 'MessageDraft',
+      entityId: 'forged-draft',
+      action: 'DRAFT_APPROVED',
+    };
+    await assert.rejects(
+      () => runWithOrg(ORG_A, async () => await db.auditEvent.create({ data: forged })),
+      /tenancy/i,
+    );
+    await assert.rejects(
+      () => runWithOrg(ORG_A, async () => await db.auditEvent.createMany({ data: [forged] })),
+      /tenancy/i,
+    );
+    // A null (platform-wide) row from a tenant context is a forgery too.
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.auditEvent.create({ data: { ...forged, organizationId: null } }),
+        ),
+      /tenancy/i,
+    );
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.auditEvent.upsert({
+            where: { id: 'forged-upsert' },
+            create: { ...forged, id: 'forged-upsert' },
+            update: {},
+          }),
+        ),
+      /tenancy/i,
+    );
+    assert.equal(await raw.auditEvent.count({ where: { entityId: 'forged-draft' } }), 0);
+  });
+
+  test('FINDING 3: an org context cannot read another org audit trail', async () => {
+    await raw.auditEvent.create({
+      data: {
+        organizationId: ORG_B,
+        actorType: 'USER',
+        actorId: 'test-user-b-owner',
+        entityType: 'Dealer',
+        entityId: 'secret-b-entity',
+        action: 'PIPELINE_STAGE_CHANGED',
+      },
+    });
+    await assert.rejects(
+      () => runWithOrg(ORG_A, async () => await db.auditEvent.findMany({ where: { organizationId: ORG_B } })),
+      /refusing/i,
+    );
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.auditEvent.findMany({
+            where: { organizationId: ORG_B },
+            include: { organization: true },
+          }),
+        ),
+      /refusing/i,
+    );
+    await assert.rejects(
+      () => runWithOrg(ORG_A, async () => await db.auditEvent.count({ where: { organizationId: ORG_B } })),
+      /refusing/i,
+    );
+    // Platform-wide rows are not a tenant's to read either.
+    await assert.rejects(
+      () => runWithOrg(ORG_A, async () => await db.auditEvent.findMany({ where: { organizationId: null } })),
+      /refusing/i,
+    );
+    // Its own org still reads normally.
+    const mine = await runWithOrg(ORG_A, async () =>
+      await db.auditEvent.findMany({ where: { organizationId: ORG_A } }),
+    );
+    assert.ok(mine.every((e) => e.organizationId === ORG_A));
+  });
+
+  test('FINDING 3: no context at all reads nothing', async () => {
+    await assert.rejects(() => db.auditEvent.findMany({ where: { organizationId: ORG_B } }), /tenancy/i);
+    await assert.rejects(
+      () => db.auditEvent.create({ data: {
+        organizationId: ORG_B,
+        actorType: 'USER',
+        actorId: 'nobody',
+        entityType: 'Dealer',
+        entityId: 'no-context',
+        action: 'PIPELINE_STAGE_CHANGED',
+      } }),
+      /tenancy/i,
+    );
   });
 
   test('a tenant-context read must name the org — nothing is guessed', async () => {

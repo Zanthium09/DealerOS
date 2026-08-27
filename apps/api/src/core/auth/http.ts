@@ -6,6 +6,8 @@ export interface HttpRequest {
   headers: Record<string, string | string[] | undefined>;
   ip?: string;
   socket?: { remoteAddress?: string };
+  /** Parsed by express before guards run. The login rate limiter keys on body.email. */
+  body?: unknown;
   // populated by the guard
   tenantSession?: unknown;
 }
@@ -25,13 +27,22 @@ export function readCookie(req: HttpRequest, name: string): string | null {
   return null;
 }
 
+// Finding 9: this used to be `NODE_ENV === 'production' ? '; Secure' : ''` — the
+// exact NODE_ENV gate the session-secret code in this same codebase deliberately
+// refuses. A deploy that forgets NODE_ENV shipped session cookies without Secure.
+// Inverted: Secure is the default and ALLOW_DEV_SECRETS=1 is the only way off it,
+// which is the same opt-in switch that governs the dev secret fallbacks.
+function insecureCookiesAllowed(): boolean {
+  return process.env.ALLOW_DEV_SECRETS === '1';
+}
+
 export function setSessionCookie(
   res: HttpResponse,
   name: string,
   value: string,
   maxAgeSeconds: number,
 ): void {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const secure = insecureCookiesAllowed() ? '' : '; Secure';
   res.setHeader(
     'Set-Cookie',
     `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`,
@@ -39,7 +50,7 @@ export function setSessionCookie(
 }
 
 export function clearSessionCookie(res: HttpResponse, name: string): void {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const secure = insecureCookiesAllowed() ? '' : '; Secure';
   res.setHeader('Set-Cookie', `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
 
