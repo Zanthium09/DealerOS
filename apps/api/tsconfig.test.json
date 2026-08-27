@@ -1,0 +1,13 @@
+{
+  // Tests are compiled, not type-stripped: Nest's DI reads `emitDecoratorMetadata`,
+  // which node --experimental-strip-types cannot produce. Same runner (node:test),
+  // one extra `tsc` — cheaper than a second test framework.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist-test",
+    "rootDir": ".",
+    "declaration": false,
+    "noEmit": false
+  },
+  "include": ["src/**/*", "test/**/*.ts"]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@dealeros/api",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "start": "nest start",
+    "dev": "nest start --watch",
+    "test": "tsc -p tsconfig.test.json && node --env-file=../../.env test/run.mjs",
+    "db:seed": "node --env-file=../../.env scripts/seed.mjs"
+  },
+  "dependencies": {
+    "@dealeros/shared": "workspace:*",
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.6",
+    "@prisma/client": "^6.19.0",
+    "bcryptjs": "^3.0.3",
+    "jose": "^5.10.0",
+    "otpauth": "^9.5.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.10",
+    "@nestjs/testing": "^11.2.3",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.2"
+  }
+}

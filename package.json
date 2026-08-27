@@ -1,0 +1,19 @@
+{
+  "name": "dealeros",
+  "private": true,
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "test": "pnpm --filter @dealeros/api test",
+    "db:seed": "pnpm --filter @dealeros/api db:seed"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0",
+    "typescript": "^5.9.2"
+  }
+}

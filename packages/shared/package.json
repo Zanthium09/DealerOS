@@ -1,0 +1,10 @@
+{
+  "name": "@dealeros/shared",
+  "private": true,
+  "version": "0.0.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}
