@@ -30,7 +30,9 @@ export const raw = new PrismaClient();
 
 export async function bootApp(): Promise<{ app: INestApplication; base: string }> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication();
+  // rawBody: true mirrors main.ts — §8 webhook tests need req.rawBody, which only
+  // exists when the app is created with this option.
+  const app = moduleRef.createNestApplication({ rawBody: true });
   await app.listen(0, '127.0.0.1');
   const { port } = app.getHttpServer().address() as AddressInfo;
   return { app, base: `http://127.0.0.1:${port}` };

@@ -47,7 +47,10 @@ async function bootstrap() {
   warnAboutDevSecrets();
   await assertSecretsUsable();
   const { AppModule } = await import('./app.module');
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true — §8 webhook signature verification must run over the exact bytes
+  // received, before JSON parsing. Nest captures them onto req.rawBody alongside the
+  // normal parsed req.body; nothing else in the app reads rawBody.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   await app.listen(process.env.PORT ?? 3001);
 }
 

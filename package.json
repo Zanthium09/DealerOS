@@ -16,5 +16,8 @@
   "devDependencies": {
     "prisma": "^6.19.0",
     "typescript": "^5.9.2"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": ["msgpackr-extract"]
   }
 }
