@@ -105,6 +105,10 @@ model Organization {
   importBatches       ImportBatch[]
   duplicateCandidates DuplicateCandidate[]
   dealerMerges        DealerMerge[]
+  interactionEvents   InteractionEvent[]
+  sendingIdentities   SendingIdentity[]
+  suppressions        Suppression[]
+  campaigns           Campaign[]
 }
 
 model User {
@@ -181,6 +185,7 @@ model Dealer {
   duplicateCandidates DuplicateCandidate[]
   mergesAsSurvivor    DealerMerge[]        @relation("MergeSurvivor")
   mergesAsMerged      DealerMerge[]        @relation("MergeMerged")
+  interactionEvents   InteractionEvent[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -400,4 +405,136 @@ model DealerMerge {
   mergedDealer    Dealer       @relation("MergeMerged", fields: [organizationId, mergedDealerId], references: [organizationId, id], onUpdate: Restrict)
 
   @@index([organizationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// §11 step 3 — InteractionEvent + webhook ingestion, and M2's sending tables
+// ---------------------------------------------------------------------------
+
+enum InteractionDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum InteractionStatus {
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  REPLIED
+  BOUNCED
+  FAILED
+  COMPLAINED
+}
+
+// Every touch, every channel, one table (§4). This is what makes warm-routing
+// (§7) a real query filter rather than a manual export.
+model InteractionEvent {
+  id             String @id @default(cuid())
+  organizationId String
+  dealerId       String
+
+  channel   ConsentChannel
+  direction InteractionDirection
+
+  campaignId        String?
+  messageDraftId    String?
+  providerMessageId String?
+
+  status    InteractionStatus
+  // The rendered text actually sent — you must be able to answer
+  // "what exactly did we send this dealer?" (§4).
+  body      String
+  createdAt DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onUpdate: Restrict)
+
+  @@index([organizationId, dealerId, createdAt])
+  @@index([organizationId, providerMessageId])
+}
+
+enum DomainVerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+// §6: never the org's primary business domain. Warmup ramp is per identity.
+model SendingIdentity {
+  id                 String                   @id @default(cuid())
+  organizationId     String
+  domain             String
+  provider           String
+  verificationStatus DomainVerificationStatus @default(UNVERIFIED)
+  dkimRecords        Json                     @default("[]")
+  warmupStartedAt    DateTime?
+  currentDailyLimit  Int                      @default(20)
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, domain])
+  @@index([organizationId])
+}
+
+// §4: scoped per organization. An opt-out from one distributor must not
+// suppress that contact for another.
+model Suppression {
+  id             String   @id @default(cuid())
+  organizationId String
+  email          String?
+  phoneE164      String?
+  reason         String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, email])
+  @@index([organizationId, phoneE164])
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  channel        ConsentChannel
+  name           String
+  status         CampaignStatus @default(DRAFT)
+  segmentFilter  Json           @default("{}")
+  templateId     String?
+  scheduledAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, status])
+}
+
+// §8 idempotency. Deliberately has NO organizationId: a webhook is received
+// before any org context exists, and the HTTP handler only persists and
+// enqueues. The org is resolved during async processing, and the
+// InteractionEvent that results IS org-scoped. Must be listed explicitly in
+// tenancy.ts's exemptions — never inferred from the absent column.
+model WebhookEvent {
+  id              String    @id @default(cuid())
+  provider        String
+  providerEventId String
+  payload         Json
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+  error           String?
+
+  @@unique([provider, providerEventId])
+  @@index([processedAt])
 }

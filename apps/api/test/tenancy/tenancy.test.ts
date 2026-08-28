@@ -576,7 +576,10 @@ describe('AdminUser exemption (explicit allowlist)', () => {
   test('queries work with no org context at all', async () => {
     const found = await db.adminUser.findUnique({ where: { id: ADMIN } });
     assert.equal(found?.email, 'admin@test.local');
-    assert.deepEqual(EXEMPT_MODELS, ['AdminUser']);
+    // Pinned deliberately: adding an exemption must be a conscious edit here,
+    // not something that slips in with a new table. AdminUser has no org by
+    // design (§9A); WebhookEvent is received before any org context exists (§8).
+    assert.deepEqual(EXEMPT_MODELS, ['AdminUser', 'WebhookEvent']);
   });
 });
 

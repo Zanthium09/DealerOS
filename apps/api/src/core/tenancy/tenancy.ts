@@ -64,7 +64,14 @@ export const SELF_SCOPED_MODELS: string[] = ['Organization'];
 // The one deliberate exemption (§4, §9A): platform operators, no organizationId by design.
 // Explicit allowlist — never "guess from the absence of a column", because that would
 // silently exempt any future table someone forgot to give an organizationId.
-export const EXEMPT_MODELS: string[] = ['AdminUser'];
+export const EXEMPT_MODELS: string[] = [
+  'AdminUser',
+  // §8: a webhook is received before any org context exists — the HTTP handler
+  // only verifies, persists and enqueues. The org is resolved during async
+  // processing, and the InteractionEvent that results IS org-scoped. Listed
+  // explicitly rather than inferred from the absent column.
+  'WebhookEvent',
+];
 
 // Operations grouped by which arg carries the scope. Anything not listed throws.
 const WHERE_OPS = new Set([
