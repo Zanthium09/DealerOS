@@ -87,9 +87,57 @@ const HAS_DATA = new Set(['update', 'updateMany', 'updateManyAndReturn']);
 
 type Args = Record<string, any>;
 
-function forceOrg(data: unknown, field: string, orgId: string): unknown {
-  if (Array.isArray(data)) return data.map((d) => ({ ...d, [field]: orgId }));
-  return { ...(data as object), [field]: orgId };
+// Relations whose foreign key lives on THIS model (Dealer.organization,
+// Dealer.assignedSalesman). Naming one in `data` is what puts Prisma in its *checked*
+// input variant — and that variant has no scalar foreign-key fields at all.
+const FORWARD_RELATIONS: Record<string, string[]> = Object.fromEntries(
+  Prisma.dmmf.datamodel.models.map((m) => [
+    m.name,
+    m.fields
+      .filter((f) => f.kind === 'object' && (f.relationFromFields?.length ?? 0) > 0)
+      .map((f) => f.name),
+  ]),
+);
+
+// The relation that carries organizationId, e.g. Dealer.organization — the checked
+// variant's only way to say which org a new row belongs to.
+const ORG_RELATION: Record<string, string | undefined> = Object.fromEntries(
+  Prisma.dmmf.datamodel.models.map((m) => [
+    m.name,
+    m.fields.find(
+      (f) =>
+        f.kind === 'object' &&
+        f.type === 'Organization' &&
+        f.relationFromFields?.length === 1 &&
+        f.relationFromFields[0] === 'organizationId',
+    )?.name,
+  ]),
+);
+
+// Injecting the scalar unconditionally forced the unchecked variant on EVERY write,
+// so a legitimate in-org `assignedSalesman: { disconnect: true }` — or connect/set,
+// composite form included — died on a Prisma validation error. When the payload names
+// a forward relation the org is carried the checked way instead: the scalar is dropped
+// (dropping a foreign one has the same effect as overwriting it — the row stays in
+// this org) and, on a create, where the column must come from somewhere, the org is
+// named through its own relation. What the caller passes on a relation is not trusted
+// either way: walkNested/requireTargetOrg still has to see this org and only this org.
+function forceOrg(
+  model: string,
+  data: unknown,
+  field: string,
+  orgId: string,
+  isCreate: boolean,
+): unknown {
+  const one = (d: Args): Args => {
+    if (!FORWARD_RELATIONS[model]?.some((k) => k in d)) return { ...d, [field]: orgId };
+    const { [field]: _dropped, ...rest } = d;
+    const orgRel = ORG_RELATION[model];
+    if (!isCreate || !orgRel || orgRel in rest) return rest;
+    return { ...rest, [orgRel]: { connect: { id: orgId } } };
+  };
+  if (Array.isArray(data)) return data.map((d) => one(d as Args));
+  return one(data as Args);
 }
 
 // A caller-supplied scope key is never silently rewritten. Rewriting it would turn
@@ -188,6 +236,22 @@ const RELATIONS: Record<string, Record<string, string>> = Object.fromEntries(
 
 const TARGET_OPS = new Set(['connect', 'connectOrCreate', 'set', 'disconnect']);
 
+// Every nested key that writes. Anything else under a relation (some/every/none/is/
+// isNot) is a filter, and filters are already bounded by the top-level org scope.
+const NESTED_WRITE_OPS = new Set([
+  'create',
+  'createMany',
+  'connectOrCreate',
+  'connect',
+  'set',
+  'disconnect',
+  'update',
+  'updateMany',
+  'upsert',
+  'delete',
+  'deleteMany',
+]);
+
 // Which column carries the org on this model — null for models the guard does not own.
 function orgFieldOf(model: string): string | null {
   if (SELF_SCOPED_MODELS.includes(model)) return 'id';
@@ -226,6 +290,21 @@ function walkNested(model: string, node: unknown, orgId: string, path: string): 
     // A relation field: its value is a map of nested operations (or a filter).
     if (!value || typeof value !== 'object') continue;
     for (const [op, payload] of Object.entries(value as Args)) {
+      // The audit trail has exactly one writer: AuditService.record(), through a
+      // TOP-LEVEL create that scopeAudit/requireAuditOrg checks. A nested write got
+      // none of that — orgFieldOf('AuditEvent') is null, so this walk judged nothing,
+      // and the app database role may INSERT, so nothing else did either. That let any
+      // tenant user plant an immutable row with a chosen actorType/actorId/action:
+      // a DRAFT_APPROVED forged against the OWNER (§1.5, §9), or a fake
+      // ADMIN/VIEWED_ORG_DATA row in the DPDP trail (§9A.3). Refused at every depth
+      // and in every shape — recursion below brings deeper payloads back through here.
+      if (AUDIT_MODELS.includes(related) && NESTED_WRITE_OPS.has(op)) {
+        throw new Error(
+          `tenancy: nested ${path}.${key}.${op} writes ${related} outside AuditService — refusing. ` +
+            `The audit trail has one writer, a top-level create (§1.5, §9A.3); a nested one ` +
+            `bypasses its org, actor and action checks and the row can never be taken back.`,
+        );
+      }
       if (op === 'connectOrCreate') {
         for (const one of Array.isArray(payload) ? payload : [payload]) {
           requireTargetOrg(related, (one as Args)?.where, orgId, `${path}.${key}.connectOrCreate.where`);
@@ -299,15 +378,15 @@ function scope(model: string, operation: string, args: Args): Args {
 
   if (operation === 'upsert') {
     next.where = scopeWhere(next.where, field, orgId);
-    next.create = forceOrg(next.create ?? {}, field, orgId);
-    next.update = forceOrg(next.update ?? {}, field, orgId);
+    next.create = forceOrg(model, next.create ?? {}, field, orgId, true);
+    next.update = forceOrg(model, next.update ?? {}, field, orgId, false);
     return guarded(next);
   }
 
   if (DATA_OPS.has(operation)) {
     // Force, not default: a caller-supplied organizationId is overwritten, so a
     // request body cannot plant a row in another tenant.
-    next.data = forceOrg(next.data ?? {}, field, orgId);
+    next.data = forceOrg(model, next.data ?? {}, field, orgId, true);
     return guarded(next);
   }
 
@@ -315,7 +394,8 @@ function scope(model: string, operation: string, args: Args): Args {
     // findUnique/update/delete accept extra filters here (extendedWhereUnique, GA since
     // Prisma 5), so a unique id belonging to another org simply matches nothing.
     next.where = scopeWhere(next.where, field, orgId);
-    if (HAS_DATA.has(operation) && next.data) next.data = forceOrg(next.data, field, orgId);
+    if (HAS_DATA.has(operation) && next.data)
+      next.data = forceOrg(model, next.data, field, orgId, false);
     return guarded(next);
   }
 

@@ -57,7 +57,7 @@ describe('AuditService.record', () => {
     );
   });
 
-  test('an org context cannot write another org row (§9A.3)', async () => {
+  test('record() refuses another org row (§9A.3)', async () => {
     await assert.rejects(
       runWithOrg(ORG, async () =>
         audit.record({
@@ -72,6 +72,37 @@ describe('AuditService.record', () => {
       /tenancy/i,
     );
     assert.equal(await raw.auditEvent.count({ where: { entityId: 'forged' } }), 0);
+  });
+
+  // record() is the only legitimate writer (§1.5, §9, §9A.3). Everything above tests
+  // the wrapper; this tests that the wrapper cannot be gone around. A nested write
+  // through the `auditEvents` relation used to reach the table with an
+  // attacker-chosen actorType and action, in the caller's own org, unattributed —
+  // which is exactly the DRAFT_APPROVED forgery the trail exists to rule out.
+  test('the auditEvents relation is not a second writer (§1.5, §9)', async () => {
+    await assert.rejects(
+      runWithOrg(ORG, async () =>
+        scoped.organization.update({
+          where: { id: ORG },
+          data: {
+            auditEvents: {
+              create: {
+                actorType: 'USER',
+                actorId: 'the-owner',
+                entityType: 'MessageDraft',
+                entityId: 'forged-by-relation',
+                action: AuditAction.DRAFT_APPROVED,
+              },
+            },
+          } as never,
+        }),
+      ),
+      /tenancy/i,
+    );
+    assert.equal(
+      await raw.auditEvent.count({ where: { entityId: 'forged-by-relation' } }),
+      0,
+    );
   });
 
   test('round-trips every field', async () => {

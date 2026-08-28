@@ -95,12 +95,16 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users        User[]
-  dealers      Dealer[]
-  consentLogs  ConsentLog[]
-  auditEvents  AuditEvent[]
-  dealerPhones DealerPhone[]
-  dealerEmails DealerEmail[]
+  users               User[]
+  dealers             Dealer[]
+  consentLogs         ConsentLog[]
+  auditEvents         AuditEvent[]
+  dealerPhones        DealerPhone[]
+  dealerEmails        DealerEmail[]
+  messageDrafts       MessageDraft[]
+  importBatches       ImportBatch[]
+  duplicateCandidates DuplicateCandidate[]
+  dealerMerges        DealerMerge[]
 }
 
 model User {
@@ -128,11 +132,11 @@ model User {
 // Platform operators. NO organizationId — deliberate (§4, §9A).
 // Separate table, separate login route (/admin/auth/*), separate session type.
 model AdminUser {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  passwordHash String?
-  role         AdminRole
-  mfaEnabled   Boolean   @default(false)
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?
+  role          AdminRole
+  mfaEnabled    Boolean   @default(false)
   // Per-admin TOTP secret, AES-256-GCM encrypted at rest with a key derived from
   // ADMIN_MFA_KEY (core/platform-admin/totp.ts). Stored rather than derived so one
   // admin's factor can be rotated without resetting everyone's, and so a database
@@ -166,13 +170,15 @@ model Dealer {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  organization     Organization  @relation(fields: [organizationId], references: [id])
+  organization        Organization         @relation(fields: [organizationId], references: [id])
   // Composite on purpose (§1.3): a salesman can only ever be a user of THIS dealer's
   // org, enforced by the foreign key, not by remembering to filter.
-  assignedSalesman User?         @relation("AssignedSalesman", fields: [organizationId, assignedSalesmanId], references: [organizationId, id], onUpdate: Restrict)
-  consentLogs      ConsentLog[]
-  phones           DealerPhone[]
-  emails           DealerEmail[]
+  assignedSalesman    User?                @relation("AssignedSalesman", fields: [organizationId, assignedSalesmanId], references: [organizationId, id], onUpdate: Restrict)
+  consentLogs         ConsentLog[]
+  phones              DealerPhone[]
+  emails              DealerEmail[]
+  messageDrafts       MessageDraft[]
+  duplicateCandidates DuplicateCandidate[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -254,4 +260,133 @@ model AuditEvent {
 
   @@index([organizationId, createdAt])
   @@index([organizationId, entityType, entityId])
+}
+
+// ---------------------------------------------------------------------------
+// §11 step 2 — Approval Queue + drafting, and M1 import/dedup (§5.1)
+// Relations to Dealer are composite (organizationId, id) like every other
+// child table, so a cross-org reference is a foreign-key violation (§1.3).
+// ---------------------------------------------------------------------------
+
+enum DraftStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  AUTO_SENT
+  EDITED_AND_SENT
+}
+
+// The AI output boundary (§1.4, §1.5). Every AI-generated outbound message
+// passes through here before it can become an InteractionEvent.
+model MessageDraft {
+  id             String @id @default(cuid())
+  organizationId String
+  dealerId       String
+  sourceModule   String
+
+  draftText              String
+  // §1.4: the DB-sourced numbers, injected as typed variables. The model never
+  // sees a free-text slot where a number could be invented.
+  templateVariables      Json    @default("{}")
+  containsFinancialTerms Boolean @default(false)
+  requiresApproval       Boolean @default(true)
+
+  status           DraftStatus @default(PENDING)
+  approvedByUserId String?
+  autoSendRuleId   String?
+  sentAt           DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onUpdate: Restrict)
+
+  @@index([organizationId, status])
+  @@index([organizationId, dealerId])
+}
+
+enum ImportStatus {
+  MAPPING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// §5.1 — `source` is mandatory per import batch, so it lives here, not per row.
+model ImportBatch {
+  id             String       @id @default(cuid())
+  organizationId String
+  filename       String
+  source         DealerSource
+  columnMapping  Json         @default("{}")
+  status         ImportStatus @default(MAPPING)
+
+  rowCount       Int @default(0)
+  createdCount   Int @default(0)
+  duplicateCount Int @default(0)
+  invalidCount   Int @default(0)
+
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  error           String?
+
+  organization Organization         @relation(fields: [organizationId], references: [id])
+  candidates   DuplicateCandidate[]
+
+  @@index([organizationId, createdAt])
+}
+
+enum MatchReason {
+  PHONE_E164
+  EMAIL
+  FUZZY_NAME_CITY
+}
+
+enum CandidateStatus {
+  PENDING
+  MERGED
+  REJECTED
+}
+
+// §5.1/§10.1: fuzzy matches are NEVER auto-merged. They land here for a human.
+model DuplicateCandidate {
+  id              String  @id @default(cuid())
+  organizationId  String
+  importBatchId   String?
+  matchedDealerId String
+
+  incomingPayload Json
+  matchReason     MatchReason
+  matchScore      Float?
+  status          CandidateStatus @default(PENDING)
+
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  createdAt        DateTime  @default(now())
+
+  organization  Organization @relation(fields: [organizationId], references: [id])
+  matchedDealer Dealer       @relation(fields: [organizationId, matchedDealerId], references: [organizationId, id], onUpdate: Restrict)
+  importBatch   ImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  @@index([organizationId, status])
+}
+
+// §5.1/§10.1: "merges are logged as reversible operations". `snapshot` holds
+// enough of the merged dealer to put it back; a wrong merge silently corrupts
+// two businesses' order and payment history, so reversal is not optional.
+model DealerMerge {
+  id                String @id @default(cuid())
+  organizationId    String
+  survivingDealerId String
+  mergedDealerId    String
+
+  snapshot        Json
+  reversedAt      DateTime?
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, createdAt])
 }

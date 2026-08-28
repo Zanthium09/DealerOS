@@ -377,6 +377,82 @@ describe('nested writes cannot cross an org boundary', () => {
     );
   });
 
+  test('FINDING 2: a cross-org salesman is refused even when the composite names it', async () => {
+    await assert.rejects(
+      () =>
+        runWithOrg(ORG_A, async () =>
+          await db.dealer.update({
+            where: { id: DEALER_A },
+            data: {
+              assignedSalesman: {
+                connect: { organizationId_id: { organizationId: ORG_B, id: USER_B } },
+              },
+            },
+          }),
+        ),
+      /tenancy/i,
+    );
+    assert.equal(
+      (await raw.dealer.findUniqueOrThrow({ where: { id: DEALER_A } })).assignedSalesmanId,
+      null,
+    );
+  });
+
+  // REGRESSION 2 — the org scalar was injected into `data` unconditionally, which
+  // forces Prisma's *unchecked* input variant, and that variant has no forward
+  // relation fields at all. So every legitimate in-org write through the relation API
+  // (connect / disconnect / set) died on a Prisma validation error. Both forms have to
+  // work: services reassign a salesman either way.
+  test('an in-org salesman assigns through the relation API, not only the scalar', async () => {
+    const assign = (data: object) =>
+      runWithOrg(ORG_A, async () => await db.dealer.update({ where: { id: DEALER_A }, data }));
+    const assignedNow = async () =>
+      (await raw.dealer.findUniqueOrThrow({ where: { id: DEALER_A } })).assignedSalesmanId;
+
+    await assign({
+      assignedSalesman: { connect: { organizationId_id: { organizationId: ORG_A, id: USER_A } } },
+    });
+    assert.equal(await assignedNow(), USER_A);
+
+    // Unassigning through the relation is the one form that stays unavailable, and
+    // not for a tenancy reason: `disconnect` nulls every field of the foreign key, and
+    // this one includes organizationId, which is NOT NULL. Same root cause as the
+    // salesman-offboarding note in §19. The scalar is how a rep is unassigned.
+    await assert.rejects(() => assign({ assignedSalesman: { disconnect: true } }), /organizationId/i);
+    assert.equal(await assignedNow(), USER_A);
+
+    // The scalar form keeps working — this is an addition, not a swap.
+    await assign({ assignedSalesmanId: null });
+    assert.equal(await assignedNow(), null);
+    await assign({ assignedSalesmanId: USER_A });
+    assert.equal(await assignedNow(), USER_A);
+    await assign({ assignedSalesmanId: null });
+    assert.equal(await assignedNow(), null);
+
+    // Still in org A, whichever form was used.
+    assert.equal(
+      (await raw.dealer.findUniqueOrThrow({ where: { id: DEALER_A } })).organizationId,
+      ORG_A,
+    );
+  });
+
+  test('a create using the relation API lands in the context org', async () => {
+    const created = await runWithOrg(ORG_A, async () =>
+      await db.dealer.create({
+        data: {
+          businessName: 'rel-create',
+          source: 'MANUAL',
+          assignedSalesman: {
+            connect: { organizationId_id: { organizationId: ORG_A, id: USER_A } },
+          },
+        } as never,
+      }),
+    );
+    assert.equal(created.organizationId, ORG_A);
+    assert.equal(created.assignedSalesmanId, USER_A);
+    await raw.dealer.delete({ where: { id: created.id } });
+  });
+
   test('FINDING 2: relation traversal yields no other-org user, and no oracle', async () => {
     const found = await runWithOrg(ORG_A, async () =>
       await db.dealer.findFirst({
@@ -576,7 +652,7 @@ describe('AuditEvent is exempt from injection (§9A.3)', () => {
 
   // FINDING 4 — an immutable, undeletable row forged against another tenant is the
   // worst kind of write this table can take (§9, §9A.3).
-  test('FINDING 4: an org context cannot forge a row attributed to another org', async () => {
+  test('FINDING 4: a direct create/createMany/upsert cannot name another org', async () => {
     const forged = {
       organizationId: ORG_B,
       actorType: 'USER' as const,
@@ -613,6 +689,94 @@ describe('AuditEvent is exempt from injection (§9A.3)', () => {
       /tenancy/i,
     );
     assert.equal(await raw.auditEvent.count({ where: { entityId: 'forged-draft' } }), 0);
+  });
+
+  // HOLE 1 — the org check above only ever ran on TOP-LEVEL AuditEvent operations.
+  // A nested write through the `auditEvents` relation never reached it (orgFieldOf
+  // returns null for AuditEvent, so walkNested checked nothing), and the app database
+  // role may INSERT, so nothing else stopped it. That let any tenant user write the
+  // trail directly, with an attacker-chosen actorType/actorId/action — forging the
+  // §9 evidence of who approved a send. Rows are immutable, so it is permanent.
+  // AuditEvent has exactly one legitimate writer: AuditService.record(), top level.
+  test('HOLE 1: no nested write reaches AuditEvent, at any depth or shape', async () => {
+    const forged = {
+      actorType: 'ADMIN' as const,
+      actorId: 'attacker',
+      entityType: 'Organization',
+      entityId: ORG_B,
+      action: 'VIEWED_ORG_DATA',
+      metadata: { forged: true },
+    };
+    const refused = (fn: () => Promise<unknown>) => assert.rejects(fn, /tenancy/i);
+
+    // create — the verified exploit.
+    await refused(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.organization.update({
+          where: { id: ORG_A },
+          data: { auditEvents: { create: forged } } as never,
+        }),
+      ),
+    );
+    // createMany.
+    await refused(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.organization.update({
+          where: { id: ORG_A },
+          data: { auditEvents: { createMany: { data: [forged] } } } as never,
+        }),
+      ),
+    );
+    // connectOrCreate.
+    await refused(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.organization.update({
+          where: { id: ORG_A },
+          data: {
+            auditEvents: {
+              connectOrCreate: { where: { id: 'forged-coc' }, create: { id: 'forged-coc', ...forged } },
+            },
+          } as never,
+        }),
+      ),
+    );
+    // upsert's update branch.
+    await refused(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.organization.upsert({
+          where: { id: ORG_A },
+          create: { id: ORG_A, name: 'A', slug: ORG_A },
+          update: { auditEvents: { create: forged } } as never,
+        }),
+      ),
+    );
+    // nested update/delete of an existing row — the table is append-only, but the
+    // guard must refuse before the trigger has to.
+    await refused(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.organization.update({
+          where: { id: ORG_A },
+          data: { auditEvents: { deleteMany: {} } } as never,
+        }),
+      ),
+    );
+    // One level deeper, through another model's relation to Organization.
+    await refused(() =>
+      runWithOrg(ORG_A, async () =>
+        await db.dealer.update({
+          where: { id: DEALER_A },
+          data: { organization: { update: { auditEvents: { create: forged } } } } as never,
+        }),
+      ),
+    );
+    // Nothing landed, by any route.
+    assert.equal(await raw.auditEvent.count({ where: { actorId: 'attacker' } }), 0);
+
+    // Reading through the relation is untouched — it is bounded by the org scope.
+    const own = await runWithOrg(ORG_A, async () =>
+      await db.organization.findMany({ where: { auditEvents: { some: { actorType: 'USER' } } } }),
+    );
+    assert.deepEqual(own.map((o) => o.id), [ORG_A]);
   });
 
   test('FINDING 3: an org context cannot read another org audit trail', async () => {

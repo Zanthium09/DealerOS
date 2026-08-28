@@ -37,7 +37,7 @@ export class PlatformLoginRateLimitGuard implements CanActivate {
     const now = Date.now();
     const maxAttempts = Number(process.env.ADMIN_LOGIN_MAX_ATTEMPTS) || DEFAULT_MAX_ATTEMPTS;
 
-    if (this.hits.size > 10_000) this.hits.clear();
+    if (this.hits.size > 10_000) this.sweepExpired(now);
 
     const entry = this.hits.get(key);
     if (!entry || entry.resetAt <= now) {
@@ -49,5 +49,15 @@ export class PlatformLoginRateLimitGuard implements CanActivate {
       throw new HttpException({ message: 'Too many login attempts. Try again shortly.' }, 429);
     }
     return true;
+  }
+
+  // `this.hits.clear()` on overflow reset live lockouts: ~10k requests with distinct
+  // emails flushed the victim's counter inside the same window (~1000:1 amplification),
+  // and every other operator's with it. Expired entries only — never a live bucket.
+  //
+  // ponytail: bounded by distinct keys per 60s window rather than by a hard cap.
+  // Redis (§2) when the API runs more than one replica.
+  private sweepExpired(now: number): void {
+    for (const [key, entry] of this.hits) if (entry.resetAt <= now) this.hits.delete(key);
   }
 }

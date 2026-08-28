@@ -37,7 +37,7 @@ export class TenantLoginRateLimitGuard implements CanActivate {
     const now = Date.now();
     const maxAttempts = Number(process.env.AUTH_LOGIN_MAX_ATTEMPTS) || DEFAULT_MAX_ATTEMPTS;
 
-    if (this.hits.size > 10_000) this.hits.clear(); // crude unbounded-growth guard
+    if (this.hits.size > 10_000) this.sweepExpired(now);
 
     const entry = this.hits.get(key);
     if (!entry || entry.resetAt <= now) {
@@ -52,5 +52,18 @@ export class TenantLoginRateLimitGuard implements CanActivate {
       );
     }
     return true;
+  }
+
+  // The growth guard used to be `this.hits.clear()`, which wiped live buckets —
+  // lockouts included. An attacker capped on one account sent ~10k requests with
+  // distinct emails, the map was flushed, and the victim's counter restarted inside
+  // the same window: ~1000:1 amplification, and every other operator's counter went
+  // with it. Only expired entries may be evicted.
+  //
+  // ponytail: an expired-only sweep, so the ceiling is however many distinct keys
+  // arrive within one 60s window — self-limiting at any rate this process can serve.
+  // Redis (§2) is still the real answer once the API runs more than one replica.
+  private sweepExpired(now: number): void {
+    for (const [key, entry] of this.hits) if (entry.resetAt <= now) this.hits.delete(key);
   }
 }

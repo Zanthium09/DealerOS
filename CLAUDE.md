@@ -754,6 +754,17 @@ migration's guarded `CREATE ROLE` then does nothing and only the grants apply. N
 tables get the app role's grants automatically (`ALTER DEFAULT PRIVILEGES`); a new
 append-only table needs its own `REVOKE UPDATE, DELETE, TRUNCATE`.
 
+**Offboarding a salesman needs an unassign step first.** The composite foreign keys
+that make cross-org assignment impossible (`Dealer.assignedSalesman` references
+`(organizationId, id)` on `User`) cannot be `ON DELETE SET NULL` — nulling the pair
+would have to null `organizationId`, which is not nullable. So a `User` with dealers
+still assigned cannot be deleted directly; the delete fails on the FK. Unassign or
+reassign their dealers first (`assignedSalesmanId: null`, or the new rep), then delete.
+The same cause makes `assignedSalesman: { disconnect: true }` fail — Prisma nulls every
+field of the key, `organizationId` included — so unassigning is `assignedSalesmanId: null`.
+Assigning works either way, scalar or relation. All of this is inherent to the composite
+key and the app-level unassign is the correct answer — do not loosen the foreign key.
+
 `pnpm test` is the only test command. It compiles `apps/api` (tests included) and then
 runs `apps/api/test/run.mjs`, which creates a throwaway database from
 `TEST_DATABASE_URL`, applies the migrations to it, runs every `*.test.js` under

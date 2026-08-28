@@ -11,9 +11,11 @@
 import '../support';
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { INestApplication } from '@nestjs/common';
+import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { bootApp, raw, req } from '../support';
 import { TEST_PASSWORD, makeAdmin, makeOrg, makeUser } from './fixtures';
+import { TenantLoginRateLimitGuard } from '../../src/core/auth/login-rate-limit.guard';
+import { PlatformLoginRateLimitGuard } from '../../src/core/platform-admin/login-rate-limit.guard';
 
 let app: INestApplication;
 let base: string;
@@ -117,6 +119,48 @@ describe('login rate limiting is per account, not per source IP (finding 8)', ()
           unknown.slice(0, 2),
           [401, 401],
           'an unknown address took a different path to the limit than a real one',
+        );
+      } finally {
+        if (prev === undefined) delete process.env[flow.envVar];
+        else process.env[flow.envVar] = prev;
+      }
+    });
+  }
+});
+
+// The overflow guard used to be `if (this.hits.size > 10_000) this.hits.clear()` —
+// which drops LIVE buckets, lockouts included. An attacker capped on one account
+// pushed ~10k requests carrying distinct emails, the map was wiped, and the victim's
+// counter restarted inside the same 60s window: ~1000:1 amplification, and every
+// other operator's counter flushed with it. Overflow may only evict expired entries.
+describe('the overflow sweep never drops a live lockout', () => {
+  const ctx = (body: unknown) =>
+    ({
+      switchToHttp: () => ({ getRequest: () => ({ headers: {}, ip: '10.0.0.1', body }) }),
+    }) as unknown as ExecutionContext;
+
+  for (const flow of [
+    { name: 'tenant', guard: () => new TenantLoginRateLimitGuard(), envVar: 'AUTH_LOGIN_MAX_ATTEMPTS' },
+    { name: 'platform admin', guard: () => new PlatformLoginRateLimitGuard(), envVar: 'ADMIN_LOGIN_MAX_ATTEMPTS' },
+  ]) {
+    test(`${flow.name}: a flood of fresh keys does not reset a locked account`, () => {
+      const prev = process.env[flow.envVar];
+      process.env[flow.envVar] = '2';
+      try {
+        const guard = flow.guard();
+        const victim = ctx({ email: 'victim@test.local' });
+
+        guard.canActivate(victim);
+        guard.canActivate(victim);
+        assert.throws(() => guard.canActivate(victim), /Too many login attempts/);
+
+        // Overflow the map with distinct, still-live keys.
+        for (let i = 0; i < 12_000; i += 1) guard.canActivate(ctx({ email: `flood-${i}@test.local` }));
+
+        assert.throws(
+          () => guard.canActivate(victim),
+          /Too many login attempts/,
+          'the lockout was flushed by the overflow sweep',
         );
       } finally {
         if (prev === undefined) delete process.env[flow.envVar];
