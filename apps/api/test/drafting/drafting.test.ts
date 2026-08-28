@@ -29,8 +29,8 @@ const ORG = 'draft-org';
 const DEALER = 'draft-dealer';
 
 const RULES: AutoSendRule[] = [
-  { id: 'cold-email-no-money', sourceModule: 'outreach-email', maxValuePaise: 0 },
-  { id: 'dormancy-under-50k', sourceModule: 'dormancy', maxValuePaise: 5_000_000 },
+  { id: 'cold-email-no-money', sourceModule: 'outreach-email' },
+  { id: 'dormancy-nudge', sourceModule: 'dormancy' },
 ];
 
 /** One service wired to a model that says exactly what the test tells it to. */
@@ -59,6 +59,23 @@ describe('§1.4 — a number cannot be expressed as free text', () => {
     // Devanagari and Arabic-Indic digits are digits too.
     assert.throws(() => template('Your balance of ५००० is overdue'), DraftingError);
     assert.throws(() => template('Your balance of ٥٠٠٠ is overdue'), DraftingError);
+  });
+
+  // FINDING 1 — `\p{Nd}` is decimal digits only. Roman numerals (Nl), fractions,
+  // superscripts, subscripts and circled digits (No) are numbers a dealer reads as
+  // numbers, so they must be as unsayable as "5000".
+  const NON_DECIMAL = ['⁵⁰⁰⁰', 'Ⅹ', '½', '①', '²', '₅₀₀₀', 'Ⅻ', '¾'];
+
+  test('template() refuses non-decimal numerals too', () => {
+    for (const glyph of NON_DECIMAL) {
+      assert.throws(() => template(`Pay ₹${glyph} lakh`), DraftingError, glyph);
+    }
+  });
+
+  test('the prose variable refuses non-decimal numerals too', () => {
+    for (const glyph of NON_DECIMAL) {
+      assert.throws(() => text(`about ${glyph} lakh`), DraftingError, glyph);
+    }
   });
 
   test('template() accepts the same sentence with the number as a slot', () => {
@@ -243,6 +260,35 @@ describe('a hostile model response cannot reach a dealer', () => {
 
   refuses('returns nothing', '   ');
 
+  // FINDING 3 — both numbers are from the database, and both are attached to the
+  // wrong noun. A per-name tally cannot see this; only order can.
+  refuses(
+    'swaps two supplied placeholders around',
+    'Your outstanding {{dueDate}} was due on {{amountDue}}.',
+  );
+
+  // FINDING 2 — no digit is written, every placeholder is present in order, and a
+  // bidi-aware client still renders ₹4,57,320.00 backwards.
+  for (const [name, ctrl] of [
+    ['right-to-left override', '‮'],
+    ['isolate', '⁦'],
+    ['zero-width space', '​'],
+  ] as const) {
+    refuses(
+      `smuggles a ${name} control character`,
+      `Your outstanding ${ctrl}{{amountDue}}‬ was due on {{dueDate}}.`,
+    );
+  }
+
+  // FINDING 1 — Nl (Roman numerals) and No (fractions, superscripts, circled digits)
+  // are numbers that `\p{Nd}` alone waves through.
+  for (const glyph of ['⁵⁰⁰⁰', 'Ⅹ', '½', '①', '²', '₅₀₀₀', 'Ⅻ', '¾']) {
+    refuses(
+      `writes a non-decimal numeral of its own (${glyph})`,
+      `Your outstanding {{amountDue}} (about ${glyph} lakh) was due on {{dueDate}}.`,
+    );
+  }
+
   test('a well-behaved rewrite still renders only DB values', async () => {
     const draft = await runWithOrg(ORG, () =>
       withModel('Gentle reminder: {{amountDue}} has been outstanding since {{dueDate}}.').draft(
@@ -276,11 +322,31 @@ describe('containsFinancialTerms is derived from the variables', () => {
     assert.equal(d.containsFinancialTerms, true);
   });
 
-  test('quantity and percent count as financial terms', async () => {
+  // FINDING 4 — a discount and a free-goods quantity are financial commitments
+  // (§5.7). A draft carrying one must never skip the queue, whatever the module rule
+  // says: containsFinancialTerms and requiresApproval must not disagree.
+  test('quantity and percent count as financial terms — and pull a human in', async () => {
     const q = await draftWith('dormancy', { qty: quantity(40, 'boxes') }, 'Reorder {{qty}}.', 'Reorder {{qty}}.');
-    assert.equal(q.containsFinancialTerms, true);
+    assert.deepEqual([q.containsFinancialTerms, q.requiresApproval, q.autoSendRuleId], [true, true, null]);
     const p = await draftWith('dormancy', { off: percent(5) }, 'Save {{off}}.', 'Save {{off}}.');
-    assert.equal(p.containsFinancialTerms, true);
+    assert.deepEqual([p.containsFinancialTerms, p.requiresApproval, p.autoSendRuleId], [true, true, null]);
+  });
+
+  test('a percent or quantity commitment never auto-sends from cold email either (§5.7)', async () => {
+    const off = await draftWith('outreach-email', { off: percent(40) }, 'Enjoy {{off}} off this month.', 'Enjoy {{off}} off this month.');
+    assert.deepEqual([off.containsFinancialTerms, off.requiresApproval, off.autoSendRuleId], [true, true, null]);
+    const free = await draftWith(
+      'outreach-email',
+      { qty: quantity(500, 'boxes') },
+      'Free {{qty}} with every order.',
+      'Free {{qty}} with every order.',
+    );
+    assert.deepEqual([free.containsFinancialTerms, free.requiresApproval, free.autoSendRuleId], [true, true, null]);
+  });
+
+  test('containsFinancialTerms and requiresApproval never disagree', async () => {
+    const financial = await draftWith('dormancy', { a: money(1) }, 'Due {{a}}.', 'Due {{a}}.');
+    assert.deepEqual([financial.containsFinancialTerms, financial.requiresApproval], [true, true]);
   });
 
   test('prose and dates alone are not financial terms', async () => {
@@ -293,19 +359,21 @@ describe('containsFinancialTerms is derived from the variables', () => {
     assert.equal(d.containsFinancialTerms, false);
   });
 
-  test('the auto-send threshold decides requiresApproval, at/below/above the boundary', async () => {
-    // dormancy rule: maxValuePaise 5_000_000.
-    const below = await draftWith('dormancy', { a: money(4_999_999) }, 'Due {{a}}.', 'Due {{a}}.');
-    assert.deepEqual(
-      [below.requiresApproval, below.autoSendRuleId],
-      [false, 'dormancy-under-50k'],
+  test('any financial term requires a human, however small (§5.7)', async () => {
+    for (const paise of [1, 4_999_999, 5_000_000, 5_000_001]) {
+      const d = await draftWith('dormancy', { a: money(paise) }, 'Due {{a}}.', 'Due {{a}}.');
+      assert.deepEqual([d.requiresApproval, d.autoSendRuleId], [true, null], String(paise));
+    }
+  });
+
+  test('a module rule auto-sends only a draft with no financial term in it at all', async () => {
+    const d = await draftWith(
+      'dormancy',
+      { name: text('Sharma'), when: date(new Date('2026-09-01T00:00:00Z')) },
+      'Hi {{name}}, back on {{when}}?',
+      'Hi {{name}}, back on {{when}}?',
     );
-
-    const at = await draftWith('dormancy', { a: money(5_000_000) }, 'Due {{a}}.', 'Due {{a}}.');
-    assert.deepEqual([at.requiresApproval, at.autoSendRuleId], [false, 'dormancy-under-50k']);
-
-    const above = await draftWith('dormancy', { a: money(5_000_001) }, 'Due {{a}}.', 'Due {{a}}.');
-    assert.deepEqual([above.requiresApproval, above.autoSendRuleId], [true, null]);
+    assert.deepEqual([d.requiresApproval, d.autoSendRuleId], [false, 'dormancy-nudge']);
   });
 
   test('a module with no rule always requires a human', async () => {

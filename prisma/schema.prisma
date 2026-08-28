@@ -179,6 +179,8 @@ model Dealer {
   emails              DealerEmail[]
   messageDrafts       MessageDraft[]
   duplicateCandidates DuplicateCandidate[]
+  mergesAsSurvivor    DealerMerge[]        @relation("MergeSurvivor")
+  mergesAsMerged      DealerMerge[]        @relation("MergeMerged")
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -334,6 +336,10 @@ model ImportBatch {
   organization Organization         @relation(fields: [organizationId], references: [id])
   candidates   DuplicateCandidate[]
 
+  // Every child relation in this file is composite (organizationId, id) so that a
+  // cross-org reference is a foreign-key violation (§1.3). This unique is what lets
+  // DuplicateCandidate.importBatch be one too.
+  @@unique([organizationId, id])
   @@index([organizationId, createdAt])
 }
 
@@ -367,7 +373,7 @@ model DuplicateCandidate {
 
   organization  Organization @relation(fields: [organizationId], references: [id])
   matchedDealer Dealer       @relation(fields: [organizationId, matchedDealerId], references: [organizationId, id], onUpdate: Restrict)
-  importBatch   ImportBatch? @relation(fields: [importBatchId], references: [id])
+  importBatch   ImportBatch? @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onUpdate: Restrict)
 
   @@index([organizationId, status])
 }
@@ -386,7 +392,12 @@ model DealerMerge {
   createdByUserId String?
   createdAt       DateTime  @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id])
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  // Composite like every other dealer reference: the last place a dealer id could
+  // live without a database-level org check (§1.3). Both dealers survive a merge —
+  // the merged one is parked at INVALID, never deleted — so an FK is safe here.
+  survivingDealer Dealer       @relation("MergeSurvivor", fields: [organizationId, survivingDealerId], references: [organizationId, id], onUpdate: Restrict)
+  mergedDealer    Dealer       @relation("MergeMerged", fields: [organizationId, mergedDealerId], references: [organizationId, id], onUpdate: Restrict)
 
   @@index([organizationId, createdAt])
 }

@@ -14,7 +14,9 @@
  *      has returned (drafting.service.ts). The model never sees a value at all — it
  *      only ever sees placeholders — so there is nothing for it to restate or round.
  *
- * Digit means `\p{Nd}`, not `[0-9]`: "५०००" and "٥٠٠٠" are numbers too.
+ * Digit means every Unicode numeric category, not `[0-9]` and not `\p{Nd}` alone:
+ * "५०००" and "٥٠٠٠" are numbers, and so are "Ⅻ" (Nl) and "½", "⁵⁰⁰⁰", "①" (No).
+ * A dealer reads "₹¾ lakh" as an amount whatever category Unicode files it under.
  *
  * ponytail: this stops digits, not the words "five thousand". A model writing a number
  * out in words is not caught here and no cheap check catches it; the human approval
@@ -22,7 +24,7 @@
  * `assertNoDigits`.
  */
 
-const DIGIT = /\p{Nd}/u;
+const DIGIT = /[\p{Nd}\p{Nl}\p{No}]/u;
 export const PLACEHOLDER = /\{\{([a-zA-Z][a-zA-Z_]*)\}\}/g;
 
 export class DraftingError extends Error {}
@@ -79,16 +81,6 @@ const FINANCIAL_KINDS = new Set<DraftVariable['kind']>(['money', 'quantity', 'pe
 
 export function containsFinancialTerms(vars: DraftVariables): boolean {
   return Object.values(vars).some((v) => FINANCIAL_KINDS.has(v.kind));
-}
-
-/** Threshold input for the auto-send rules (§5.6, §9): the largest money value in the
- *  draft. Max, not sum — "a draft worth more than X needs a human" is about the
- *  commitment being made, and summing two unrelated invoices invents a bigger one. */
-export function maxMoneyPaise(vars: DraftVariables): number {
-  return Object.values(vars).reduce(
-    (max, v) => (v.kind === 'money' ? Math.max(max, v.amountPaise) : max),
-    0,
-  );
 }
 
 export function money(amountPaise: number): DraftVariable {

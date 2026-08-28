@@ -124,7 +124,12 @@ export class ApprovalService {
    */
   async autoSend(draftId: string): Promise<MessageDraft> {
     const draft = await this.load(draftId);
-    const rule = this.rules.find((r) => r.id === draft.autoSendRuleId);
+    // Re-derived from the row, not merely looked up by id: a real rule id copied onto
+    // a draft from a module that rule does not cover is exactly the hand-written row
+    // this check exists to stop.
+    const rule = this.rules.find(
+      (r) => r.id === draft.autoSendRuleId && r.sourceModule === draft.sourceModule,
+    );
     if (draft.requiresApproval || !rule) {
       throw new ApprovalError(
         `draft ${draftId} needs a human — it carries no valid auto-send rule (§9).`,

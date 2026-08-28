@@ -15,8 +15,8 @@ const scoped = withTenancy(new PrismaClient());
 const audit = new AuditService(scoped as unknown as PrismaClient);
 
 const RULES: AutoSendRule[] = [
-  { id: 'cold-email-no-money', sourceModule: 'outreach-email', maxValuePaise: 0 },
-  { id: 'dormancy-under-50k', sourceModule: 'dormancy', maxValuePaise: 5_000_000 },
+  { id: 'cold-email-no-money', sourceModule: 'outreach-email' },
+  { id: 'dormancy-nudge', sourceModule: 'dormancy' },
 ];
 
 const queue = new ApprovalService(scoped as unknown as PrismaClient, audit, RULES);
@@ -172,7 +172,7 @@ describe('legal transitions out of PENDING', () => {
     const id = await mkDraft({
       sourceModule: 'dormancy',
       requiresApproval: false,
-      autoSendRuleId: 'dormancy-under-50k',
+      autoSendRuleId: 'dormancy-nudge',
     });
     const draft = await runWithOrg(ORG_A, () => queue.autoSend(id));
     assert.equal(draft.status, DraftStatus.APPROVED);
@@ -182,13 +182,13 @@ describe('legal transitions out of PENDING', () => {
     assert.equal(event.action, 'DRAFT_AUTO_SENT');
     assert.equal(event.actorType, 'SYSTEM');
     assert.equal(event.actorId, null);
-    assert.equal((event.metadata as any).autoSendRuleId, 'dormancy-under-50k');
+    assert.equal((event.metadata as any).autoSendRuleId, 'dormancy-nudge');
   });
 });
 
 describe('autoSend refuses anything a rule does not actually cover', () => {
   test('a draft that requires approval cannot be auto-sent', async () => {
-    const id = await mkDraft({ requiresApproval: true, autoSendRuleId: 'dormancy-under-50k' });
+    const id = await mkDraft({ requiresApproval: true, autoSendRuleId: 'dormancy-nudge' });
     await assert.rejects(runWithOrg(ORG_A, () => queue.autoSend(id)), ApprovalError);
     assert.equal(await statusOf(id), DraftStatus.PENDING);
     assert.equal((await eventsFor(id)).length, 0);
@@ -196,6 +196,30 @@ describe('autoSend refuses anything a rule does not actually cover', () => {
 
   test('a draft naming a rule that does not exist cannot be auto-sent', async () => {
     const id = await mkDraft({ requiresApproval: false, autoSendRuleId: 'invented-rule' });
+    await assert.rejects(runWithOrg(ORG_A, () => queue.autoSend(id)), ApprovalError);
+    assert.equal(await statusOf(id), DraftStatus.PENDING);
+  });
+
+  // FINDING 5 — the rule must be re-derived, not merely found by id. A row naming a
+  // real rule that belongs to a different module is exactly the hand-written row the
+  // check exists to stop.
+  test('a draft naming a rule belonging to another module cannot be auto-sent', async () => {
+    const id = await mkDraft({
+      sourceModule: 'dormancy',
+      requiresApproval: false,
+      autoSendRuleId: 'cold-email-no-money',
+    });
+    await assert.rejects(runWithOrg(ORG_A, () => queue.autoSend(id)), ApprovalError);
+    assert.equal(await statusOf(id), DraftStatus.PENDING);
+    assert.equal((await eventsFor(id)).length, 0);
+  });
+
+  test('a draft from a module with no rule at all cannot be auto-sent', async () => {
+    const id = await mkDraft({
+      sourceModule: 'collections',
+      requiresApproval: false,
+      autoSendRuleId: 'dormancy-nudge',
+    });
     await assert.rejects(runWithOrg(ORG_A, () => queue.autoSend(id)), ApprovalError);
     assert.equal(await statusOf(id), DraftStatus.PENDING);
   });
@@ -228,7 +252,7 @@ describe('illegal transitions — PENDING is the only decidable state (§12.3)',
           draftText: 'Already decided.',
           // Auto-send eligible, so the refusal is about the STATE and nothing else.
           requiresApproval: false,
-          autoSendRuleId: 'dormancy-under-50k',
+          autoSendRuleId: 'dormancy-nudge',
           sourceModule: 'dormancy',
         });
         await assert.rejects(runWithOrg(ORG_A, () => run(id)), ApprovalError);
@@ -281,24 +305,97 @@ describe('another org’s draft is invisible and un-approvable (§1.3)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// §9 — the auto-send threshold, at / below / above the boundary
+// §9 — auto-send rules are per module and deterministic
 // ---------------------------------------------------------------------------
 
-describe('auto-send thresholds are per module and deterministic', () => {
-  test('below, at and above 50k', () => {
-    const at = (paise: number) => autoSendRuleFor(RULES, 'dormancy', paise)?.id ?? null;
-    assert.equal(at(4_999_999), 'dormancy-under-50k');
-    assert.equal(at(5_000_000), 'dormancy-under-50k');
-    assert.equal(at(5_000_001), null);
-  });
-
+describe('auto-send rules are per module and deterministic', () => {
   test('a rule never applies to another module', () => {
-    assert.equal(autoSendRuleFor(RULES, 'collections', 0), null);
-    assert.equal(autoSendRuleFor(RULES, 'outreach-email', 0)?.id, 'cold-email-no-money');
-    assert.equal(autoSendRuleFor(RULES, 'outreach-email', 1), null);
+    assert.equal(autoSendRuleFor(RULES, 'collections'), null);
+    assert.equal(autoSendRuleFor(RULES, 'outreach-email')?.id, 'cold-email-no-money');
+    assert.equal(autoSendRuleFor(RULES, 'dormancy')?.id, 'dormancy-nudge');
   });
 
   test('no rules configured means nothing auto-sends', () => {
-    assert.equal(autoSendRuleFor([], 'outreach-email', 0), null);
+    assert.equal(autoSendRuleFor([], 'outreach-email'), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §12.3 — the state machine under concurrency. The single-winner guarantee is this
+// service's central claim; asserting it needs concurrent callers, not sequential ones.
+// ---------------------------------------------------------------------------
+
+describe('concurrent decisions produce exactly one winner (§9, §12.3)', () => {
+  /** Separate clients = separate pooled connections = a real race, not a fake one. */
+  const clients = Array.from(
+    { length: 8 },
+    () => withTenancy(new PrismaClient()) as unknown as PrismaClient,
+  );
+  const rivals = clients.map((c) => new ApprovalService(c, new AuditService(c), RULES));
+  after(async () => {
+    await Promise.all(clients.map((c) => c.$disconnect()));
+  });
+
+  /** Runs `attempt` on all eight services at once and reports who survived. */
+  async function race(id: string, attempt: (q: ApprovalService, i: number) => Promise<unknown>) {
+    const results = await Promise.allSettled(
+      rivals.map((q, i) => runWithOrg(ORG_A, () => attempt(q, i))),
+    );
+    const won = results.filter((r) => r.status === 'fulfilled').length;
+    for (const r of results) {
+      if (r.status === 'rejected') assert.ok(r.reason instanceof ApprovalError, String(r.reason));
+    }
+    return { won, events: await eventsFor(id) };
+  }
+
+  // Repeated: a race that only fails one run in five is still a race.
+  for (let round = 0; round < 5; round++) {
+    test(`eight concurrent approvals, round ${round + 1}`, async () => {
+      const id = await mkDraft();
+      const { won, events } = await race(id, (q) => q.approve(id, USER));
+      assert.equal(won, 1);
+      assert.equal(events.length, 1);
+      assert.equal(await statusOf(id), DraftStatus.APPROVED);
+    });
+  }
+
+  test('approve racing reject: one decision, one audit row, and they agree', async () => {
+    const id = await mkDraft();
+    const { won, events } = await race(id, (q, i) =>
+      i % 2 === 0 ? q.approve(id, USER) : q.reject(id, USER, 'tone'),
+    );
+    assert.equal(won, 1);
+    assert.equal(events.length, 1);
+    const draft = await raw.messageDraft.findUniqueOrThrow({ where: { id } });
+    // The audit row must describe the transition that actually happened.
+    assert.equal(
+      events[0].action,
+      draft.status === DraftStatus.APPROVED ? 'DRAFT_APPROVED' : 'DRAFT_REJECTED',
+    );
+    assert.equal(draft.approvedByUserId, draft.status === DraftStatus.APPROVED ? USER : null);
+  });
+
+  test('concurrent editAndApprove: one rewrite lands, and it is the audited one', async () => {
+    const id = await mkDraft({ draftText: 'Original wording.' });
+    const { won, events } = await race(id, (q, i) => q.editAndApprove(id, USER, `Rewrite ${'x'.repeat(i)}.`));
+    assert.equal(won, 1);
+    assert.equal(events.length, 1);
+    const draft = await raw.messageDraft.findUniqueOrThrow({ where: { id } });
+    assert.match(draft.draftText, /^Rewrite x*\.$/);
+    // No half-applied write: the losing rewrites are not in the row or the trail.
+    assert.equal((events[0].metadata as any).previousText, 'Original wording.');
+  });
+
+  test('concurrent autoSend sends once — a duplicate send is the failure mode (§9)', async () => {
+    const id = await mkDraft({
+      sourceModule: 'dormancy',
+      requiresApproval: false,
+      autoSendRuleId: 'dormancy-nudge',
+    });
+    const { won, events } = await race(id, (q) => q.autoSend(id));
+    assert.equal(won, 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].action, 'DRAFT_AUTO_SENT');
+    assert.equal(await statusOf(id), DraftStatus.APPROVED);
   });
 });

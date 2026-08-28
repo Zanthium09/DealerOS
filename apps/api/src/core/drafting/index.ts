@@ -12,6 +12,5 @@ export {
   render,
   renderVariable,
   containsFinancialTerms,
-  maxMoneyPaise,
 } from './variables';
 export type { Template, DraftVariable, DraftVariables } from './variables';

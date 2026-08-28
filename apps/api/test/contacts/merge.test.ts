@@ -109,6 +109,10 @@ describe('merge (§5.1, §10.1)', () => {
     assert.equal(backAgain.dedupeKey, merged.dedupeKey);
     assert.equal(backAgain.phones.length, 1);
     assert.equal(backAgain.emails.length, 1);
+    // "fully reversible" includes the primary flags: a dealer with contact points and
+    // no primary one is not the record we took away.
+    assert.equal(backAgain.phones[0].isPrimary, true, 'the primary phone is still primary');
+    assert.equal(backAgain.emails[0].isPrimary, true, 'the primary email is still primary');
     assert.equal(
       (await raw.dealer.findUniqueOrThrow({ where: { id: surviving.id }, include: { phones: true } }))
         .phones.length,
@@ -227,6 +231,36 @@ describe('merge (§5.1, §10.1)', () => {
     assert.equal(closed.status, 'MERGED');
     assert.equal(closed.reviewedByUserId, USER_A);
   });
+
+  // Two clicks in the review queue in the wrong order used to park BOTH dealers at
+  // INVALID with dedupeKey null — out of the pipeline, out of outreach, out of dedup,
+  // and one reversal only brings one side back. §5.1: "a wrong merge silently corrupts
+  // two businesses' order and payment history".
+  test('a merged-away dealer cannot take part in another merge', async () => {
+    const surviving = await makeDealer(ORG_A, 'Double Merge Survivor');
+    const merged = await makeDealer(ORG_A, 'Double Merge Merged');
+
+    await runWithOrg(ORG_A, () =>
+      merges.merge({ survivingDealerId: surviving.id, mergedDealerId: merged.id }),
+    );
+
+    await runWithOrg(ORG_A, async () => {
+      // ...as the dealer being merged away again,
+      await assert.rejects(
+        () => merges.merge({ survivingDealerId: surviving.id, mergedDealerId: merged.id }),
+        /merged-away/i,
+      );
+      // ...and as the survivor of a new one, which is what killed both records.
+      await assert.rejects(
+        () => merges.merge({ survivingDealerId: merged.id, mergedDealerId: surviving.id }),
+        /merged-away/i,
+      );
+    });
+
+    const survivorNow = await raw.dealer.findUniqueOrThrow({ where: { id: surviving.id } });
+    assert.equal(survivorNow.pipelineStage, 'NEW', 'the survivor is still a live business');
+    assert.notEqual(survivorNow.dedupeKey, null, 'and still matches future imports');
+  });
 });
 
 describe('org scoping (§1.3)', () => {
@@ -266,6 +300,41 @@ describe('org scoping (§1.3)', () => {
     assert.equal(
       (await raw.dealerMerge.findUniqueOrThrow({ where: { id: mergeId } })).reversedAt,
       null,
+    );
+  });
+});
+
+// §1.3 — DuplicateCandidate.importBatchId was the one non-composite foreign key in the
+// schema, so a scalar id from another org passed every guard (a scalar is not a
+// relation, so walkNested never inspects it) and `include: { importBatch: true }`
+// returned the other tenant's row in full through a scoped client.
+describe('DuplicateCandidate.importBatch is org-scoped (§1.3)', () => {
+  test("a candidate cannot point at another org's import batch", async () => {
+    const dealerA = await makeDealer(ORG_A, 'FK Guard');
+    const batchB = await raw.importBatch.create({
+      data: { organizationId: ORG_B, filename: 'org-b.csv', source: 'IMPORTED_LIST' },
+    });
+
+    await runWithOrg(ORG_A, async () => {
+      await assert.rejects(
+        () =>
+          db.duplicateCandidate.create({
+            data: {
+              organizationId: ORG_A,
+              matchedDealerId: dealerA.id,
+              importBatchId: batchB.id,
+              incomingPayload: {},
+              matchReason: 'FUZZY_NAME_CITY',
+            },
+          }),
+        /foreign key/i,
+        'a cross-org reference must be a foreign-key violation, not a stored pointer',
+      );
+    });
+
+    assert.equal(
+      await raw.duplicateCandidate.count({ where: { importBatchId: batchB.id } }),
+      0,
     );
   });
 });

@@ -729,6 +729,14 @@ pnpm install
 docker compose up -d          # Postgres :5433, Redis :6380
 cp .env.example .env          # then set the secrets — see the note at the top of it
 pnpm prisma:deploy            # or `pnpm prisma:migrate` while changing the schema
+
+**Migration folder timestamps.** Several early migrations were written by hand with
+timestamps ahead of the real clock (`20260828120000` onwards). Prisma replays
+migrations in folder-name order, so a new one generated at the true wall-clock time
+sorts *before* the constraints it depends on and fails against the shadow database.
+Until the clock overtakes them, rename a newly generated folder to sort last, and if
+it was already applied, update `_prisma_migrations.migration_name` to match — do not
+reset the dev database for it.
 pnpm db:seed                  # one Organization, one OWNER User, one PLATFORM_ADMIN
 pnpm test                     # the whole suite
 ```

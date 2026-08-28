@@ -67,7 +67,14 @@ export class MergeService {
     ]);
     if (!surviving || !merged) throw new NotFoundException('Dealer not found.');
 
-    const carriedConsent = await this.optOutsToCarry(surviving.id, merged.id);
+    // INVALID is where merge() parks a dealer it merged away. Merging one again — in
+    // either position — parks BOTH records at INVALID with dedupeKey null, and one
+    // reversal only brings one side back: two clicks in the review queue in the wrong
+    // order silently kill a real business (§5.1, §10.1). Reverse the first merge first.
+    if (merged.pipelineStage === 'INVALID' || surviving.pipelineStage === 'INVALID') {
+      throw new BadRequestException('A merged-away dealer cannot take part in another merge.');
+    }
+
     const snapshot: MergeSnapshot = {
       merged: {
         id: merged.id,
@@ -77,18 +84,27 @@ export class MergeService {
       },
       movedPhoneIds: merged.phones.map((p) => p.id),
       movedEmailIds: merged.emails.map((e) => e.id),
-      carriedConsent,
+      carriedConsent: [],
     };
 
     return this.prisma.$transaction(async (tx) => {
       const t = tx as unknown as PrismaClient;
+      // Inside the transaction, not before it: an opt-out landing between the read and
+      // the write would otherwise be left behind on a dealer whose phone has already
+      // moved — i.e. someone who said "stop" could be messaged after a merge (§1.6).
+      const carriedConsent = await this.optOutsToCarry(surviving.id, merged.id, t);
+      snapshot.carriedConsent = carriedConsent;
+      // The rows move as they are. isPrimary is not unique-constrained and nothing
+      // reads it to pick "the" number, so clearing it bought nothing and cost the
+      // reversal: a merge-then-reverse used to hand back a dealer with contact points
+      // and no primary one, which is not "fully reversible" (§10.1).
       await t.dealerPhone.updateMany({
         where: { dealerId: merged.id },
-        data: { dealerId: surviving.id, isPrimary: false },
+        data: { dealerId: surviving.id },
       });
       await t.dealerEmail.updateMany({
         where: { dealerId: merged.id },
-        data: { dealerId: surviving.id, isPrimary: false },
+        data: { dealerId: surviving.id },
       });
       for (const c of carriedConsent) {
         await t.consentLog.create({
@@ -203,12 +219,13 @@ export class MergeService {
   private async optOutsToCarry(
     survivingDealerId: string,
     mergedDealerId: string,
+    db: PrismaClient = this.prisma,
   ): Promise<{ channel: ConsentChannel; source: string }[]> {
     const carry: { channel: ConsentChannel; source: string }[] = [];
     for (const channel of CHANNELS) {
       const [mergedState, survivingState] = await Promise.all([
-        this.latestConsent(mergedDealerId, channel),
-        this.latestConsent(survivingDealerId, channel),
+        this.latestConsent(db, mergedDealerId, channel),
+        this.latestConsent(db, survivingDealerId, channel),
       ]);
       if (mergedState?.state === 'OPTED_OUT' && survivingState?.state !== 'OPTED_OUT') {
         carry.push({ channel, source: mergedState.source });
@@ -218,8 +235,8 @@ export class MergeService {
   }
 
   /** §10.2 — most recent row per (dealerId, channel) wins. */
-  private latestConsent(dealerId: string, channel: ConsentChannel) {
-    return this.prisma.consentLog.findFirst({
+  private latestConsent(db: PrismaClient, dealerId: string, channel: ConsentChannel) {
+    return db.consentLog.findFirst({
       where: { dealerId, channel },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
