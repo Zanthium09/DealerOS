@@ -7,6 +7,7 @@ import { currentConsentState, isEligibleForEmail } from './consent';
 import { buildMessageId } from './message-id';
 import { unsubscribeHeaders, unsubscribeUrl } from './unsubscribe';
 import { KILL_SWITCH, KillSwitch, SEND_THROTTLE, SendThrottle } from './ports';
+import { assertSendAllowed } from '../../core/killswitch/staging-guard';
 
 export const SOURCE_MODULE = 'outreach-email';
 
@@ -65,6 +66,12 @@ export class EmailSendService {
     if (dealerEmail.verificationStatus === 'INVALID') {
       throw new EmailSendError(`dealer ${dealer.id}'s email is INVALID — never sent to (§6)`);
     }
+
+    // §12.7 — a code-level guard, not documentation. A no-op in production; everywhere
+    // else it throws unless this address is a recognised test destination, regardless
+    // of what credentials happen to be loaded. Was previously written but never called
+    // from the real send path — the only real send path in the app.
+    assertSendAllowed({ email: dealerEmail.address });
 
     const suppressed = await this.prisma.suppression.findFirst({ where: { email: dealerEmail.address } });
     if (suppressed) {

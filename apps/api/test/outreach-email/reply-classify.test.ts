@@ -62,10 +62,26 @@ describe('heuristics catch the common cases without ever asking the model', () =
   });
 
   test('an explicit unsubscribe request in the body', async () => {
+    // Moved out of "without ever asking the model": a bare phrase match is no longer
+    // the decision by itself, because "unsubscribe me from the newsletter, but yes we
+    // want this" contains the same phrase while being genuine interest (§13 — the
+    // reviewer that found this traced it end to end). The model is now always asked
+    // which intent dominates when the phrase appears; an unclear answer defaults to
+    // UNSUBSCRIBE_REQUEST (§1.6, consent-first), which this un-configured fake produces.
     const ai = new FakeAIProvider();
     const result = await classifyReply(email({ body: 'Please unsubscribe me from this list.' }), ai);
     assert.equal(result, 'UNSUBSCRIBE_REQUEST');
-    assert.equal(ai.calls.length, 0);
+    assert.equal(ai.calls.length, 1, 'the phrase alone no longer decides it — the model is asked');
+  });
+
+  test('unsubscribe phrase alongside genuine interest is NOT auto-opted-out', async () => {
+    const ai = new FakeAIProvider('HUMAN_REPLY');
+    const result = await classifyReply(
+      email({ body: 'please unsubscribe me from the newsletter, but yes we want this' }),
+      ai,
+    );
+    assert.equal(result, 'HUMAN_REPLY');
+    assert.equal(ai.calls.length, 1);
   });
 
   test('text with no heuristic match falls through to the model, not a guess', async () => {

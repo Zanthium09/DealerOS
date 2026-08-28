@@ -4,10 +4,11 @@
 // refused, unconditionally, regardless of what secrets happen to be loaded.
 //
 // Defaults need no configuration to be safe out of the box: Meta's own WhatsApp test
-// numbers live under +1 555, and example.com / *.test / test.local are IANA/RFC
-// reserved for exactly this. Real dealer numbers and addresses never match either.
+// numbers live under +1 555, and example.com/.org/.net, the bare .example TLD, and
+// test.local are all IANA/RFC 2606 reserved for exactly this — 'sharmatraders.example'
+// is as reserved as 'sharmatraders.example.com'. Real dealer addresses never match.
 const DEFAULT_TEST_PHONE_PREFIXES = ['+1555'];
-const DEFAULT_TEST_EMAIL_DOMAINS = ['example.com', 'example.org', 'example.net', 'test.local'];
+const DEFAULT_TEST_EMAIL_DOMAINS = ['example.com', 'example.org', 'example.net', 'example', 'test.local'];
 
 function testPhonePrefixes(): string[] {
   const env = process.env.STAGING_TEST_PHONE_PREFIXES;

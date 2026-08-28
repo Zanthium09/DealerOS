@@ -54,7 +54,29 @@ export async function classifyReply(email: InboundEmail, ai: AIProvider): Promis
   const byHeader = classifyByHeaders(email);
   if (byHeader) return byHeader;
 
-  if (UNSUB_PHRASE.test(email.body) || UNSUB_PHRASE.test(email.subject)) return 'UNSUBSCRIBE_REQUEST';
+  // The phrase alone is NOT the decision — "please unsubscribe me from the newsletter,
+  // but yes we want this" contains it while being a genuine, interested human reply.
+  // Opting that dealer out on a bare regex match loses the relationship (§13). The
+  // model sees the whole message and is asked which intent actually dominates; a
+  // reply the model can't confidently call one way still defaults to the safe
+  // direction for THIS question — DPDP is consent-first (§1.6), so "might have meant
+  // to opt out" defaults to opting out, unlike the human-vs-auto question below where
+  // the safe direction is the opposite (a missed lead is recoverable; a wrongly
+  // suppressed one is not retried).
+  if (UNSUB_PHRASE.test(email.body) || UNSUB_PHRASE.test(email.subject)) {
+    const unsubAnswer = await ai.complete({
+      system:
+        'One inbound reply to a cold sales outreach email contains unsubscribe-like ' +
+        'language. Decide which intent dominates. Answer with exactly one word: ' +
+        'UNSUBSCRIBE_REQUEST if the sender wants to stop hearing from us, or ' +
+        'HUMAN_REPLY if the sender is actually interested despite that phrase ' +
+        '(e.g. asking to be removed from a different list, or a passing remark, ' +
+        'while the substance of the reply shows real interest). When genuinely ' +
+        'unsure, answer UNSUBSCRIBE_REQUEST.',
+      prompt: `Subject: ${email.subject}\n\n${email.body}`,
+    });
+    return /^\s*HUMAN_REPLY/i.test(unsubAnswer) ? 'HUMAN_REPLY' : 'UNSUBSCRIBE_REQUEST';
+  }
 
   // Still ambiguous: short, generic, or otherwise not caught by a heuristic. Ask the
   // model to pick between exactly two labels — never to draft anything (§1.5 is about

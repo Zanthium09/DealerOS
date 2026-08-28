@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../../core/audit';
-import { ApprovalModule } from '../../core/approval';
 import { DraftingModule } from '../../core/drafting';
 import { AiModule } from '../../providers/ai';
 import { EmailModule } from '../../providers/email';
@@ -21,7 +20,11 @@ import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE 
  * / KILL_SWITCH below, by overriding those two providers.
  */
 @Module({
-  imports: [AuditModule, ApprovalModule, DraftingModule, AiModule, EmailModule],
+  // ApprovalModule is NOT imported here: AppModule's ApprovalModule.forRoot(...) is
+  // global (approval.module.ts), so ApprovalService/AUTO_SEND_RULES are already
+  // visible. Importing the plain module again would create a second, disconnected
+  // empty-rules instance — the exact bug that shipped once already this phase.
+  imports: [AuditModule, DraftingModule, AiModule, EmailModule],
   controllers: [OutreachEmailController],
   providers: [
     OutreachEmailService,
