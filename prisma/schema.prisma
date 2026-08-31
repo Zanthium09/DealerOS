@@ -109,6 +109,7 @@ model Organization {
   sendingIdentities   SendingIdentity[]
   suppressions        Suppression[]
   campaigns           Campaign[]
+  outreachSchedules   OutreachSchedule[]
 }
 
 model User {
@@ -537,4 +538,39 @@ model WebhookEvent {
 
   @@unique([provider, providerEventId])
   @@index([processedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Cold-outreach scheduling and batching (§5.2 extension). Multiple schedules per
+// org allowed — e.g. one segment daily, another weekly. Each is a BullMQ repeatable
+// job under the hood; this table is the durable record the job registration is
+// rebuilt from at boot (BullMQ's own repeat registry does not survive a Redis flush,
+// this table does).
+// ---------------------------------------------------------------------------
+model OutreachSchedule {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  enabled        Boolean @default(true)
+
+  // Standard 5-field cron ("0 9 * * *" = daily at 9am). Validated by BullMQ at
+  // registration time, not re-validated here — one parser, not two.
+  cronExpression String
+
+  // Caps this run the same way a manual "send N now" would (see runColdOutreach).
+  // Null = no extra cap beyond the daily send limit already enforced (§6).
+  maxDealersPerRun Int?
+
+  // Same shape as the manual run's segment filter — city/state/businessCategory/
+  // source/pipelineStage. {} = every eligible NEW dealer, matching today's default.
+  segmentFilter Json @default("{}")
+
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  lastRunAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { CurrentTenantSession, TenantAuthGuard } from '../../core/auth';
 import type { TenantSession } from '../../core/auth';
@@ -6,8 +6,10 @@ import { PRISMA } from '../../core/tenancy/tenancy.module';
 import { getOrgId } from '../../core/tenancy/tenancy';
 import { ApprovalError, ApprovalService } from '../../core/approval';
 import { OutreachEmailService } from './outreach-email.service';
+import type { ColdOutreachOptions } from './outreach-email.service';
 import { EmailSendService, SOURCE_MODULE } from './send.service';
 import { SequenceService } from './sequence.service';
+import type { OutreachSegmentFilter } from './eligibility';
 
 /**
  * The human-facing side of M2 (§5.2, §9): trigger a cold-outreach run, see the
@@ -32,10 +34,27 @@ export class OutreachEmailDashboardController {
     private readonly sequence: SequenceService,
   ) {}
 
-  /** Drafts eligible dealers, auto-sends the ones with no financial terms (§5.2). */
+  /**
+   * Drafts eligible dealers, auto-sends the ones with no financial terms (§5.2).
+   * Every field is optional — an empty body behaves exactly as before ("all eligible
+   * NEW dealers, no cap, auto-send where the rules already allow it").
+   *   maxDealers      — "how many to send at each press"
+   *   segmentFilter    — city/state/businessCategory/source/pipelineStage, or an
+   *                      explicit dealerIds[] for "send to exactly these dealers"
+   *                      (the Dealers page's checkbox-select)
+   *   forceReview      — every draft from this run needs a human, regardless of content
+   */
   @Post('run')
-  run(@CurrentTenantSession() session: TenantSession) {
-    return this.outreach.runColdOutreach(session.organizationId);
+  run(
+    @CurrentTenantSession() session: TenantSession,
+    @Body() body: { maxDealers?: number; segmentFilter?: OutreachSegmentFilter; forceReview?: boolean } = {},
+  ) {
+    const options: ColdOutreachOptions = {
+      maxDealers: typeof body.maxDealers === 'number' && body.maxDealers > 0 ? body.maxDealers : undefined,
+      segmentFilter: body.segmentFilter,
+      forceReview: body.forceReview === true,
+    };
+    return this.outreach.runColdOutreach(session.organizationId, options);
   }
 
   /** The approval queue, this channel only. Full dealer history lives at
@@ -110,6 +129,25 @@ export class OutreachEmailDashboardController {
   async verifyIdentity(@Param('id') id: string) {
     await this.prisma.sendingIdentity.update({ where: { id }, data: { verificationStatus: 'VERIFIED' } });
     return { ok: true };
+  }
+
+  /**
+   * The "how many to send" quantity, per identity. NOT a bypass of §6's warmup ramp —
+   * ThrottleService.effectiveDailyLimit still caps sends to the warmup value while an
+   * identity is warming up, regardless of what this is set to; raising it only takes
+   * effect once warmup (plus its grace window) has passed. That is the correct
+   * behaviour: this field is the ceiling an org wants once trusted, not a way to skip
+   * the reason the ramp exists.
+   */
+  @Patch('sending-identities/:id')
+  updateIdentity(@Param('id') id: string, @Body() body: { currentDailyLimit?: unknown }) {
+    if (typeof body?.currentDailyLimit !== 'number' || body.currentDailyLimit < 1) {
+      throw new BadRequestException('currentDailyLimit must be a positive number');
+    }
+    return this.prisma.sendingIdentity.update({
+      where: { id },
+      data: { currentDailyLimit: Math.floor(body.currentDailyLimit) },
+    });
   }
 
   private async decideAndSend(draftId: string, decide: () => Promise<{ id: string }>) {

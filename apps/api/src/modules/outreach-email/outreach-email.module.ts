@@ -1,10 +1,13 @@
-import { Module } from '@nestjs/common';
+import { Module, OnApplicationBootstrap, OnModuleDestroy, Inject } from '@nestjs/common';
+import { ConnectionOptions, Queue, Worker } from 'bullmq';
+import { PrismaClient } from '@prisma/client';
 import { AuditModule } from '../../core/audit';
 import { DraftingModule } from '../../core/drafting';
 import { AiModule } from '../../providers/ai';
 import { EmailModule } from '../../providers/email';
 import { OutreachEmailController } from './outreach-email.controller';
 import { OutreachEmailDashboardController } from './dashboard.controller';
+import { ScheduleController } from './schedule.controller';
 import { OutreachEmailService } from './outreach-email.service';
 import { ColdDraftService } from './cold-draft.service';
 import { EmailSendService, EMAIL_SEND_CONFIG, EmailSendConfig } from './send.service';
@@ -13,6 +16,9 @@ import { OutreachEmailWebhookService } from './webhook.service';
 import { InboundEmailService } from './inbound.service';
 import { UnsubscribeEndpointService } from './unsubscribe-endpoint.service';
 import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE } from './ports';
+import { ScheduleService } from './schedule.service';
+import { createScheduleQueue, createScheduleWorker, reconcileSchedules } from './schedule-queue';
+import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
 
 /**
  * §5.2 / §11 step 5. Deliberately NOT imported into AppModule here — the task that
@@ -26,7 +32,7 @@ import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE 
   // visible. Importing the plain module again would create a second, disconnected
   // empty-rules instance — the exact bug that shipped once already this phase.
   imports: [AuditModule, DraftingModule, AiModule, EmailModule],
-  controllers: [OutreachEmailController, OutreachEmailDashboardController],
+  controllers: [OutreachEmailController, OutreachEmailDashboardController, ScheduleController],
   providers: [
     OutreachEmailService,
     ColdDraftService,
@@ -35,6 +41,7 @@ import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE 
     OutreachEmailWebhookService,
     InboundEmailService,
     UnsubscribeEndpointService,
+    ScheduleService,
     { provide: SEND_THROTTLE, useClass: AlwaysAllowThrottle },
     { provide: KILL_SWITCH, useClass: NeverPausedKillSwitch },
     { provide: SEQUENCE_STEPS, useValue: DEFAULT_SEQUENCE_STEPS_MS },
@@ -51,10 +58,39 @@ import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE 
       provide: 'OUTREACH_EMAIL_REDIS_CONNECTION',
       useFactory: () => ({ url: process.env.REDIS_URL ?? 'redis://localhost:6380', maxRetriesPerRequest: null }),
     },
+    {
+      provide: SCHEDULE_QUEUE,
+      useFactory: (connection: ConnectionOptions) => createScheduleQueue(connection),
+      inject: ['OUTREACH_EMAIL_REDIS_CONNECTION'],
+    },
   ],
   exports: [OutreachEmailService, EmailSendService, SequenceService, OutreachEmailWebhookService, InboundEmailService],
 })
-export class OutreachEmailModule {}
+export class OutreachEmailModule implements OnApplicationBootstrap, OnModuleDestroy {
+  // A dedicated, UNSCOPED client — not the tenancy-scoped PRISMA token. The worker
+  // learns which org a firing belongs to by reading the schedule row itself, so it
+  // cannot start inside an org context it doesn't have yet. Same precedent as
+  // AuthModule/PlatformAdminModule's bare client for the first query of a login.
+  private readonly rawPrisma = new PrismaClient();
+  private worker?: Worker;
+
+  constructor(
+    @Inject(SCHEDULE_QUEUE) private readonly scheduleQueue: Queue,
+    private readonly outreach: OutreachEmailService,
+    @Inject('OUTREACH_EMAIL_REDIS_CONNECTION') private readonly redisConnection: ConnectionOptions,
+  ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    this.worker = createScheduleWorker(this.redisConnection, this.rawPrisma, this.outreach, SCHEDULE_QUEUE_NAME);
+    await reconcileSchedules(this.scheduleQueue, this.rawPrisma);
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.worker?.close();
+    await this.scheduleQueue.close();
+    await this.rawPrisma.$disconnect();
+  }
+}
 
 function requireDevSecret(): string {
   if (process.env.ALLOW_DEV_SECRETS === '1') return 'dev-only-unsubscribe-secret-change-me-0000';
