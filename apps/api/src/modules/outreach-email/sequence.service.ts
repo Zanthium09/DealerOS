@@ -3,6 +3,7 @@ import { Queue, Worker, ConnectionOptions } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { PRISMA } from '../../core/tenancy/tenancy.module';
 import { runWithOrg } from '../../core/tenancy/tenancy';
+import { logRedisErrors } from '../../core/redis';
 import { ApprovalService } from '../../core/approval';
 import { ColdDraftService } from './cold-draft.service';
 import { EmailSendService } from './send.service';
@@ -56,6 +57,8 @@ export class SequenceService implements OnModuleDestroy {
   ) {
     this.queue = new Queue<JobData>(SEQUENCE_QUEUE_NAME, { connection });
     this.worker = new Worker<JobData>(SEQUENCE_QUEUE_NAME, (job) => this.process(job.data), { connection });
+    logRedisErrors(this.queue, `outreach-email:${SEQUENCE_QUEUE_NAME}:queue`);
+    logRedisErrors(this.worker, `outreach-email:${SEQUENCE_QUEUE_NAME}:worker`);
   }
 
   async onModuleDestroy(): Promise<void> {

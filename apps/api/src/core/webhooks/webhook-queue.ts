@@ -1,13 +1,16 @@
 import { Queue, Worker } from 'bullmq';
 import type IORedis from 'ioredis';
 import type { PrismaClient } from '@prisma/client';
+import { logRedisErrors } from '../redis';
 import { processWebhookEvent } from './webhook-processor';
 import type { WebhookAdapter } from './webhook-adapter';
 
 export const WEBHOOK_QUEUE_NAME = 'webhook-processing';
 
 export function createWebhookQueue(connection: IORedis, queueName = WEBHOOK_QUEUE_NAME): Queue {
-  return new Queue(queueName, { connection });
+  const queue = new Queue(queueName, { connection });
+  logRedisErrors(queue, `webhooks:${queueName}:queue`);
+  return queue;
 }
 
 /**
@@ -27,11 +30,13 @@ export function createWebhookWorker(
   adapters: Map<string, WebhookAdapter>,
   queueName = WEBHOOK_QUEUE_NAME,
 ): Worker {
-  return new Worker(
+  const worker = new Worker(
     queueName,
     async (job) => {
       await processWebhookEvent(job.data.webhookEventId as string, prisma, adapters);
     },
     { connection },
   );
+  logRedisErrors(worker, `webhooks:${queueName}:worker`);
+  return worker;
 }

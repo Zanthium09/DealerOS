@@ -20,6 +20,9 @@ export default function SettingsPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [limitDrafts, setLimitDrafts] = useState<Record<string, string>>({});
+  const [savingLimitId, setSavingLimitId] = useState<string | null>(null);
+  const [limitError, setLimitError] = useState<string | null>(null);
 
   function load() {
     setLoadError(null);
@@ -61,6 +64,33 @@ export default function SettingsPage() {
   }
 
   const hasVerified = identities?.some((i) => i.verificationStatus === 'VERIFIED') ?? false;
+
+  async function saveLimit(id: string) {
+    const raw = limitDrafts[id];
+    const value = Number(raw);
+    if (!raw || !Number.isFinite(value) || value < 1) {
+      setLimitError('Daily limit must be a positive number');
+      return;
+    }
+    setSavingLimitId(id);
+    setLimitError(null);
+    try {
+      await apiFetch(`/outreach-email/sending-identities/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ currentDailyLimit: Math.floor(value) }),
+      });
+      setLimitDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      load();
+    } catch (err) {
+      setLimitError(err instanceof ApiError ? err.message : 'Could not update daily limit');
+    } finally {
+      setSavingLimitId(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -140,7 +170,25 @@ export default function SettingsPage() {
                       {i.verificationStatus}
                     </span>
                   </td>
-                  <td className="px-4 py-2">{i.currentDailyLimit}</td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        className="w-20 rounded border px-2 py-1 text-sm"
+                        placeholder={String(i.currentDailyLimit)}
+                        value={limitDrafts[i.id] ?? ''}
+                        onChange={(e) => setLimitDrafts((prev) => ({ ...prev, [i.id]: e.target.value }))}
+                      />
+                      <button
+                        onClick={() => saveLimit(i.id)}
+                        disabled={savingLimitId === i.id || !limitDrafts[i.id]}
+                        className="rounded border px-2 py-1 text-xs disabled:opacity-50"
+                      >
+                        {savingLimitId === i.id ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </td>
                   <td className="px-4 py-2">
                     {i.verificationStatus !== 'VERIFIED' && (
                       <button
@@ -159,9 +207,14 @@ export default function SettingsPage() {
           </tbody>
         </table>
       </div>
+      {limitError && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">{limitError}</p>}
       <p className="text-xs text-neutral-500">
         &quot;Mark Verified&quot; is a manual stand-in: click it only after you have confirmed the SPF, DKIM and DMARC
         DNS records with your email provider. It does not perform an automatic DNS check.
+      </p>
+      <p className="text-xs text-neutral-500">
+        Daily limit is the ceiling once warmup has finished — while an identity is still ramping up, the lower
+        warmup value applies regardless of what this is set to.
       </p>
     </div>
   );

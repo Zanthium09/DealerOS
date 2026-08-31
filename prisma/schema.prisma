@@ -553,9 +553,15 @@ model OutreachSchedule {
   name           String
   enabled        Boolean @default(true)
 
+  // Exactly one of these two is set — enforced in schedule.service.ts, not a DB
+  // constraint (matches how "source is mandatory" etc. are enforced elsewhere in
+  // this codebase: at the service layer, not fought into Prisma's migration DSL).
+  //   cronExpression set  -> recurring (BullMQ repeatable job)
+  //   scheduledAt set     -> exactly once, at that moment (BullMQ delayed job)
   // Standard 5-field cron ("0 9 * * *" = daily at 9am). Validated by BullMQ at
   // registration time, not re-validated here — one parser, not two.
-  cronExpression String
+  cronExpression String?
+  scheduledAt    DateTime?
 
   // Caps this run the same way a manual "send N now" would (see runColdOutreach).
   // Null = no extra cap beyond the daily send limit already enforced (§6).
@@ -569,6 +575,11 @@ model OutreachSchedule {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   lastRunAt       DateTime?
+  // Set when the firing that produced lastRunAt failed (e.g. no sending identity,
+  // no API key configured), cleared on a successful firing. Without this a failed
+  // one-time schedule looked identical to one that had never run — BullMQ itself
+  // does not retry by default, so a failed firing is otherwise a silent dead end.
+  lastError String?
 
   organization Organization @relation(fields: [organizationId], references: [id])
 

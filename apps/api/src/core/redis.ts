@@ -31,3 +31,22 @@ export function closeSharedRedis(): void {
   shared?.disconnect();
   shared = undefined;
 }
+
+/**
+ * A BullMQ Queue or Worker that never gets an 'error' listener crashes the whole
+ * process on the first transient Redis hiccup — Node's EventEmitter rethrows an
+ * 'error' event as an uncaught exception when nothing is listening for it, and a
+ * connection racing its own shutdown (an in-flight blocking read on a socket that
+ * `onModuleDestroy` just closed) is exactly the kind of transient error this hits.
+ * Found via an intermittent ~15% boot-check crash — "Emitted 'error' event on Worker
+ * instance" — while adding a second Worker to a module that already had one; the gap
+ * was pre-existing on every BullMQ instance in this codebase, just less likely to be
+ * hit with only one Worker in the process. One helper, called at every Queue/Worker
+ * construction site, rather than three copies of the same `.on('error', ...)`.
+ */
+export function logRedisErrors(emitter: { on(event: 'error', cb: (err: Error) => void): unknown }, label: string): void {
+  emitter.on('error', (err) => {
+    // eslint-disable-next-line no-console
+    console.error(`[${label}] Redis connection error (non-fatal, BullMQ retries internally):`, err.message);
+  });
+}

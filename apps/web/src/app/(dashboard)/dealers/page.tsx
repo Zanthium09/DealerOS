@@ -17,6 +17,8 @@ type Dealer = {
 
 type RunResult = { drafted: number; sent: number; skipped: { dealerId: string; reason: string }[] };
 
+type SegmentFilter = { pipelineStage?: string; city?: string; state?: string; businessCategory?: string; source?: string };
+
 type ImportPreview = {
   batchId: string;
   headers: string[];
@@ -50,6 +52,15 @@ export default function DealersPage() {
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
 
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showOptions, setShowOptions] = useState(false);
+  const [maxDealers, setMaxDealers] = useState('');
+  const [forceReview, setForceReview] = useState(false);
+  const [filterCity, setFilterCity] = useState('');
+  const [filterState, setFilterState] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterSource, setFilterSource] = useState('');
+
   const fileInput = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState('MANUAL');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -75,12 +86,31 @@ export default function DealersPage() {
       .catch(() => setHasVerifiedIdentity(false));
   }, []);
 
-  async function runOutreach() {
+  function buildSegmentFilter(): SegmentFilter | undefined {
+    const f: SegmentFilter = {};
+    if (filterCity.trim()) f.city = filterCity.trim();
+    if (filterState.trim()) f.state = filterState.trim();
+    if (filterCategory.trim()) f.businessCategory = filterCategory.trim();
+    if (filterSource) f.source = filterSource;
+    return Object.keys(f).length > 0 ? f : undefined;
+  }
+
+  async function runOutreach(dealerIds?: string[]) {
     setRunning(true);
     setRunError(null);
     setRunResult(null);
     try {
-      const result = await apiFetch<RunResult>('/outreach-email/run', { method: 'POST' });
+      const body: {
+        maxDealers?: number;
+        forceReview?: boolean;
+        segmentFilter?: SegmentFilter & { dealerIds?: string[] };
+      } = {};
+      if (maxDealers.trim() && Number(maxDealers) > 0) body.maxDealers = Number(maxDealers);
+      if (forceReview) body.forceReview = true;
+      const segmentFilter = dealerIds ? { dealerIds } : buildSegmentFilter();
+      if (segmentFilter) body.segmentFilter = segmentFilter;
+
+      const result = await apiFetch<RunResult>('/outreach-email/run', { method: 'POST', body: JSON.stringify(body) });
       setRunResult(result);
       load();
     } catch (err) {
@@ -88,6 +118,20 @@ export default function DealersPage() {
     } finally {
       setRunning(false);
     }
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    if (!dealers) return;
+    setSelected((prev) => (prev.size === dealers.length ? new Set() : new Set(dealers.map((d) => d.id))));
   }
 
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
@@ -153,14 +197,96 @@ export default function DealersPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Dealers</h1>
-        <button
-          onClick={runOutreach}
-          disabled={running}
-          className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          {running ? 'Running…' : 'Run Cold Outreach'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowOptions((v) => !v)}
+            className="rounded border px-3 py-2 text-sm text-neutral-600 hover:text-neutral-900"
+          >
+            Options {showOptions ? '▲' : '▼'}
+          </button>
+          {selected.size > 0 && (
+            <button
+              onClick={() => runOutreach(Array.from(selected))}
+              disabled={running}
+              className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {running ? 'Running…' : `Send to Selected (${selected.size})`}
+            </button>
+          )}
+          <button
+            onClick={() => runOutreach()}
+            disabled={running}
+            className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {running ? 'Running…' : 'Run Cold Outreach'}
+          </button>
+        </div>
       </div>
+
+      {showOptions && (
+        <div className="space-y-3 rounded border bg-white p-4 text-sm">
+          <p className="text-xs text-neutral-500">
+            These options apply to both buttons above. Blank fields mean no filter / no limit. Selecting dealers via
+            the checkboxes below ignores the segment filters and targets exactly those dealers instead.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-neutral-600">Limit this run to</label>
+              <input
+                type="number"
+                min={1}
+                placeholder="no limit"
+                value={maxDealers}
+                onChange={(e) => setMaxDealers(e.target.value)}
+                className="w-28 rounded border px-2 py-1.5 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-neutral-600">City</label>
+              <input
+                value={filterCity}
+                onChange={(e) => setFilterCity(e.target.value)}
+                className="w-32 rounded border px-2 py-1.5 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-neutral-600">State</label>
+              <input
+                value={filterState}
+                onChange={(e) => setFilterState(e.target.value)}
+                className="w-32 rounded border px-2 py-1.5 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-neutral-600">Business category</label>
+              <input
+                value={filterCategory}
+                onChange={(e) => setFilterCategory(e.target.value)}
+                className="w-32 rounded border px-2 py-1.5 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-neutral-600">Source</label>
+              <select
+                value={filterSource}
+                onChange={(e) => setFilterSource(e.target.value)}
+                className="rounded border px-2 py-1.5 text-sm"
+              >
+                <option value="">Any</option>
+                {SOURCES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 pb-1.5 text-sm">
+              <input type="checkbox" checked={forceReview} onChange={(e) => setForceReview(e.target.checked)} />
+              Send everything to the approval queue instead of auto-sending
+            </label>
+          </div>
+        </div>
+      )}
 
       {runError && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">{runError}</p>}
       {runResult && (
@@ -269,6 +395,14 @@ export default function DealersPage() {
         <table className="w-full text-sm">
           <thead className="border-b bg-neutral-50 text-left text-neutral-500">
             <tr>
+              <th className="px-4 py-2 font-medium">
+                <input
+                  type="checkbox"
+                  checked={dealers !== null && dealers.length > 0 && selected.size === dealers.length}
+                  onChange={toggleSelectAllVisible}
+                  disabled={!dealers || dealers.length === 0}
+                />
+              </th>
               <th className="px-4 py-2 font-medium">Business</th>
               <th className="px-4 py-2 font-medium">City</th>
               <th className="px-4 py-2 font-medium">Stage</th>
@@ -278,19 +412,22 @@ export default function DealersPage() {
           <tbody>
             {dealers === null ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-500" colSpan={4}>
+                <td className="px-4 py-4 text-neutral-500" colSpan={5}>
                   Loading…
                 </td>
               </tr>
             ) : dealers.length === 0 ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-500" colSpan={4}>
+                <td className="px-4 py-4 text-neutral-500" colSpan={5}>
                   No dealers yet — import a list above to get started.
                 </td>
               </tr>
             ) : (
               dealers.map((d) => (
                 <tr key={d.id} className="border-b last:border-0">
+                  <td className="px-4 py-2">
+                    <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelected(d.id)} />
+                  </td>
                   <td className="px-4 py-2">{d.businessName}</td>
                   <td className="px-4 py-2">{[d.city, d.state].filter(Boolean).join(', ') || '—'}</td>
                   <td className="px-4 py-2">
