@@ -12,6 +12,7 @@ import { KillSwitchModule } from './core/killswitch/killswitch.module';
 import { WebhooksModule } from './core/webhooks/webhooks.module';
 import { EmailModule } from './providers/email/email.module';
 import { OutreachEmailModule } from './modules/outreach-email/outreach-email.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
 import { ThrottleServiceAdapter, KillSwitchAdapter } from './wiring/outreach-email-adapters';
@@ -54,6 +55,7 @@ class HealthController {
     // named outright as auto-send eligible (§9's default is otherwise empty).
     EmailModule,
     OutreachEmailModule,
+    DashboardModule,
   ],
   controllers: [HealthController],
   providers: [

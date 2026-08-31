@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Dealer, MessageDraft, PrismaClient } from '@prisma/client';
+import { PRISMA } from '../../core/tenancy/tenancy.module';
 import { DraftingService, template, text } from '../../core/drafting';
 import { SOURCE_MODULE } from './send.service';
 
@@ -9,8 +10,12 @@ import { SOURCE_MODULE } from './send.service';
  * a skeleton the model rewrites for tone (drafting.service.ts's SYSTEM prompt), not
  * an instruction — an instruction here would be echoed verbatim by a model that
  * doesn't distinguish "rewrite this" from "here is what to write".
+ *
+ * This is the DEFAULT — used whenever an org has not saved its own wording via
+ * OutreachTemplate (template.service.ts). An empty template table is a valid,
+ * ordinary state, not a missing-config error.
  */
-const COLD_TEMPLATE = template(
+const DEFAULT_COLD_TEMPLATE = template(
   'Hello {{contactName}}, I am reaching out from {{ourBusinessName}} — we distribute ' +
     'to businesses like {{businessName}} and would love to explore working together as ' +
     'a dealer. If this sounds interesting, please reply and we can share more.',
@@ -18,16 +23,25 @@ const COLD_TEMPLATE = template(
 
 @Injectable()
 export class ColdDraftService {
-  constructor(private readonly drafting: DraftingService) {}
+  constructor(
+    @Inject(PRISMA) private readonly prisma: PrismaClient,
+    private readonly drafting: DraftingService,
+  ) {}
 
-  draft(
+  async draft(
     dealer: Dealer & { contactPersonName?: string | null },
     ourBusinessName: string,
   ): Promise<MessageDraft> {
+    const active = await this.prisma.outreachTemplate.findFirst({ where: { isActive: true } });
+    // Re-validated on load, not just on save (template.service.ts already does that):
+    // defence in depth, cheap, and consistent with §1.4 being treated as structural
+    // rather than a save-time-only courtesy.
+    const skeleton = active ? template(active.bodyText) : DEFAULT_COLD_TEMPLATE;
+
     return this.drafting.draft({
       dealerId: dealer.id,
       sourceModule: SOURCE_MODULE,
-      template: COLD_TEMPLATE,
+      template: skeleton,
       variables: {
         businessName: text(dealer.businessName),
         contactName: text(dealer.contactPersonName ?? 'Sir/Madam'),

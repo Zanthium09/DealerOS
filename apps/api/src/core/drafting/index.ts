@@ -12,5 +12,6 @@ export {
   render,
   renderVariable,
   containsFinancialTerms,
+  placeholdersIn,
 } from './variables';
 export type { Template, DraftVariable, DraftVariables } from './variables';

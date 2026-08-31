@@ -3,7 +3,7 @@
 //
 // The file arrives base64 in JSON rather than as multipart: no new dependency, and
 // nothing about the import logic depends on the transport.
-import { Body, Controller, Get, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { CurrentTenantSession, TenantAuthGuard } from '../../core/auth';
@@ -72,10 +72,36 @@ export class ContactsController {
   async get(@Param('id') id: string) {
     const dealer = await this.prisma.dealer.findFirst({
       where: { id },
-      include: { emails: true, phones: true, consentLogs: { orderBy: { createdAt: 'desc' }, take: 20 } },
+      include: {
+        emails: true,
+        phones: true,
+        consentLogs: { orderBy: { createdAt: 'desc' }, take: 20 },
+        interactionEvents: { orderBy: { createdAt: 'desc' }, take: 50 },
+        assignedSalesman: { select: { id: true, name: true, email: true } },
+      },
     });
     if (!dealer) throw new NotFoundException(`no dealer ${id}`);
     return dealer;
+  }
+
+  /** Manual overrides a rep needs day to day: a note, moving the pipeline stage by
+   *  hand (not every transition is driven by an inbound reply), reassigning who owns
+   *  the relationship. Every field optional — send only what changed. */
+  @Patch(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() body: { notes?: string | null; pipelineStage?: string; assignedSalesmanId?: string | null },
+  ) {
+    const dealer = await this.prisma.dealer.findFirst({ where: { id } });
+    if (!dealer) throw new NotFoundException(`no dealer ${id}`);
+    return this.prisma.dealer.update({
+      where: { id },
+      data: {
+        ...(body.notes !== undefined ? { notes: body.notes } : {}),
+        ...(body.pipelineStage !== undefined ? { pipelineStage: body.pipelineStage as never } : {}),
+        ...(body.assignedSalesmanId !== undefined ? { assignedSalesmanId: body.assignedSalesmanId } : {}),
+      },
+    });
   }
 
   @Post('merges')

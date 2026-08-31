@@ -26,7 +26,7 @@ const RULES = [{ id: 'cold-email-no-money', sourceModule: 'outreach-email' }];
 const approval = new ApprovalService(scoped as unknown as PrismaClient, audit, RULES);
 const ai = new FakeAIProvider();
 const drafting = new DraftingService(scoped as unknown as PrismaClient, ai, RULES);
-const coldDraft = new ColdDraftService(drafting);
+const coldDraft = new ColdDraftService(scoped as unknown as PrismaClient, drafting);
 const CONFIG = { unsubscribeSecret: 'test-secret', publicBaseUrl: 'https://app.test' };
 
 const STEP_DELAY_MS = 300;

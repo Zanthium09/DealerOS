@@ -110,6 +110,7 @@ model Organization {
   suppressions        Suppression[]
   campaigns           Campaign[]
   outreachSchedules   OutreachSchedule[]
+  outreachTemplates   OutreachTemplate[]
 }
 
 model User {
@@ -161,6 +162,9 @@ model Dealer {
   organizationId    String
   businessName      String
   contactPersonName String?
+  // Internal-only, never sent to a dealer or read by drafting — a rep's own notes.
+  // No §1.4 concern: this text never becomes part of an outbound message.
+  notes             String?
 
   region           String?
   city             String?
@@ -579,7 +583,29 @@ model OutreachSchedule {
   // no API key configured), cleared on a successful firing. Without this a failed
   // one-time schedule looked identical to one that had never run — BullMQ itself
   // does not retry by default, so a failed firing is otherwise a silent dead end.
-  lastError String?
+  lastError       String?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Editable cold-outreach wording. Exactly one active row per org — cold-draft.service
+// falls back to its own hardcoded default when none exists, so this table being empty
+// is a valid, safe state, not an error. bodyText is validated through the same
+// template()/assertNoDigits path (§1.4) as the hardcoded default before it is ever
+// saved — a business owner editing wording is not a loophole for a free-typed number
+// any more than a hand-written skeleton in code is.
+// ---------------------------------------------------------------------------
+model OutreachTemplate {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  bodyText       String
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
 

@@ -8,6 +8,9 @@ import { EmailModule } from '../../providers/email';
 import { OutreachEmailController } from './outreach-email.controller';
 import { OutreachEmailDashboardController } from './dashboard.controller';
 import { ScheduleController } from './schedule.controller';
+import { TemplateController } from './template.controller';
+import { TemplateService } from './template.service';
+import { SuppressionController } from './suppression.controller';
 import { OutreachEmailService } from './outreach-email.service';
 import { ColdDraftService } from './cold-draft.service';
 import { EmailSendService, EMAIL_SEND_CONFIG, EmailSendConfig } from './send.service';
@@ -32,10 +35,17 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
   // visible. Importing the plain module again would create a second, disconnected
   // empty-rules instance — the exact bug that shipped once already this phase.
   imports: [AuditModule, DraftingModule, AiModule, EmailModule],
-  controllers: [OutreachEmailController, OutreachEmailDashboardController, ScheduleController],
+  controllers: [
+    OutreachEmailController,
+    OutreachEmailDashboardController,
+    ScheduleController,
+    TemplateController,
+    SuppressionController,
+  ],
   providers: [
     OutreachEmailService,
     ColdDraftService,
+    TemplateService,
     EmailSendService,
     SequenceService,
     OutreachEmailWebhookService,
