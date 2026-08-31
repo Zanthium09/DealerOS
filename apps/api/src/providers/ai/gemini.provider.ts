@@ -2,12 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { AICompletion, AIProvider } from './ai.provider';
 
 /**
- * Free tier as of 2026: Flash-Lite gives 1,000 requests/day with no card on file —
- * comfortably above this app's own send-throttle ceiling (§6: 20/day warmup rising
- * to a 50/day hard cap), so drafting volume never gets near Google's free limit.
+ * NOT flash-lite: as of Aug 2026, gemini-2.5-flash-lite is being wound down ahead of
+ * its Oct 2026 retirement and is returning 503s on the live API well before that date
+ * — found by actually exercising this provider, not by trusting the model card. Its
+ * named replacement, gemini-3.1-flash-lite, is still preview-only with no clearly
+ * published rate limit. Plain gemini-2.5-flash is confirmed working today with a
+ * published free tier of 250 requests/day, no card on file — still comfortably above
+ * this app's own send-throttle ceiling (§6: 20/day warmup rising to a 50/day hard
+ * cap), so drafting volume never gets near Google's free limit either way.
  * One place, so a migration is one line (§1.7), same as ANTHROPIC_MODEL.
  */
-export const GEMINI_MODEL = 'gemini-2.5-flash-lite';
+export const GEMINI_MODEL = 'gemini-2.5-flash';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 

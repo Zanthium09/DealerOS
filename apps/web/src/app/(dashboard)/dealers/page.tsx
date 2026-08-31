@@ -2,7 +2,26 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { ChevronRight, Upload, SlidersHorizontal, Users } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
+import { stageBadgeClass } from '@/lib/badge-styles';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 type Dealer = {
   id: string;
@@ -32,6 +51,12 @@ type ImportResult = { createdCount: number; duplicateCount: number; invalidCount
 const STAGES = ['NEW', 'CONTACTED', 'INTERESTED', 'ONBOARDED', 'ACTIVE', 'DORMANT'];
 const SOURCES = ['MANUAL', 'IMPORTED_LIST', 'TRADE_FAIR', 'INQUIRY', 'REFERRAL', 'DISCOVERED'];
 
+// Base UI's <SelectValue> only renders the selected item's label (instead of the
+// raw value) when the Root is given this `items` map — see @base-ui/react/select.
+const STAGE_FILTER_ITEMS = { __all__: 'All', ...Object.fromEntries(STAGES.map((s) => [s, s])) };
+const SOURCE_ITEMS = Object.fromEntries(SOURCES.map((s) => [s, s]));
+const SOURCE_FILTER_ITEMS = { __any__: 'Any', ...SOURCE_ITEMS };
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -53,7 +78,7 @@ export default function DealersPage() {
   const [runError, setRunError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [showOptions, setShowOptions] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [maxDealers, setMaxDealers] = useState('');
   const [forceReview, setForceReview] = useState(false);
   const [filterCity, setFilterCity] = useState('');
@@ -62,6 +87,7 @@ export default function DealersPage() {
   const [filterSource, setFilterSource] = useState('');
 
   const fileInput = useRef<HTMLInputElement>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [source, setSource] = useState('MANUAL');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -181,265 +207,332 @@ export default function DealersPage() {
   function cancelImport() {
     setPreview(null);
     setPendingFile(null);
+    setImportError(null);
     if (fileInput.current) fileInput.current.value = '';
+  }
+
+  function closeImportDialog() {
+    setImportOpen(false);
+    cancelImport();
+    setImportResult(null);
   }
 
   return (
     <div className="space-y-6">
       {hasVerifiedIdentity === false && (
-        <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          No verified sending identity yet — cold outreach emails cannot be sent until you add and verify one.{' '}
-          <Link href="/settings" className="font-medium underline">
-            Go to Settings
-          </Link>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>No verified sending identity</AlertTitle>
+          <AlertDescription>
+            Cold outreach emails cannot be sent until you add and verify one.{' '}
+            <Link href="/settings">Go to Settings</Link>
+          </AlertDescription>
+        </Alert>
       )}
 
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Dealers</h1>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowOptions((v) => !v)}
-            className="rounded border px-3 py-2 text-sm text-neutral-600 hover:text-neutral-900"
-          >
-            Options {showOptions ? '▲' : '▼'}
-          </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold">Dealers</h1>
+          <p className="text-sm text-muted-foreground">Prospect and dealer records across the pipeline.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload /> Import Dealers
+          </Button>
+          <Button variant={optionsOpen ? 'secondary' : 'outline'} onClick={() => setOptionsOpen((v) => !v)}>
+            <SlidersHorizontal /> Options
+          </Button>
           {selected.size > 0 && (
-            <button
-              onClick={() => runOutreach(Array.from(selected))}
-              disabled={running}
-              className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
+            <Button onClick={() => runOutreach(Array.from(selected))} disabled={running}>
               {running ? 'Running…' : `Send to Selected (${selected.size})`}
-            </button>
+            </Button>
           )}
-          <button
-            onClick={() => runOutreach()}
-            disabled={running}
-            className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
+          <Button onClick={() => runOutreach()} disabled={running}>
             {running ? 'Running…' : 'Run Cold Outreach'}
-          </button>
+          </Button>
         </div>
       </div>
 
-      {showOptions && (
-        <div className="space-y-3 rounded border bg-white p-4 text-sm">
-          <p className="text-xs text-neutral-500">
-            These options apply to both buttons above. Blank fields mean no filter / no limit. Selecting dealers via
-            the checkboxes below ignores the segment filters and targets exactly those dealers instead.
-          </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-neutral-600">Limit this run to</label>
-              <input
-                type="number"
-                min={1}
-                placeholder="no limit"
-                value={maxDealers}
-                onChange={(e) => setMaxDealers(e.target.value)}
-                className="w-28 rounded border px-2 py-1.5 text-sm"
-              />
+      {optionsOpen && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Outreach options</CardTitle>
+            <CardDescription>
+              Applies to both send buttons above. Blank fields mean no filter / no limit. Selecting dealers via the
+              checkboxes below ignores these segment filters and targets exactly those dealers instead.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="opt-limit">Limit this run to</Label>
+                <Input
+                  id="opt-limit"
+                  type="number"
+                  min={1}
+                  placeholder="no limit"
+                  value={maxDealers}
+                  onChange={(e) => setMaxDealers(e.target.value)}
+                  className="w-28"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="opt-city">City</Label>
+                <Input id="opt-city" value={filterCity} onChange={(e) => setFilterCity(e.target.value)} className="w-32" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="opt-state">State</Label>
+                <Input id="opt-state" value={filterState} onChange={(e) => setFilterState(e.target.value)} className="w-32" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="opt-category">Business category</Label>
+                <Input
+                  id="opt-category"
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="w-32"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Source</Label>
+                <Select
+                  items={SOURCE_FILTER_ITEMS}
+                  value={filterSource || '__any__'}
+                  onValueChange={(v) => setFilterSource(v === '__any__' ? '' : String(v))}
+                >
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="Any" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__any__">Any</SelectItem>
+                    {SOURCES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <label className="flex items-center gap-2 pb-1.5 text-sm">
+                <input type="checkbox" checked={forceReview} onChange={(e) => setForceReview(e.target.checked)} />
+                Send everything to the approval queue instead of auto-sending
+              </label>
             </div>
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-neutral-600">City</label>
-              <input
-                value={filterCity}
-                onChange={(e) => setFilterCity(e.target.value)}
-                className="w-32 rounded border px-2 py-1.5 text-sm"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-neutral-600">State</label>
-              <input
-                value={filterState}
-                onChange={(e) => setFilterState(e.target.value)}
-                className="w-32 rounded border px-2 py-1.5 text-sm"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-neutral-600">Business category</label>
-              <input
-                value={filterCategory}
-                onChange={(e) => setFilterCategory(e.target.value)}
-                className="w-32 rounded border px-2 py-1.5 text-sm"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-neutral-600">Source</label>
-              <select
-                value={filterSource}
-                onChange={(e) => setFilterSource(e.target.value)}
-                className="rounded border px-2 py-1.5 text-sm"
-              >
-                <option value="">Any</option>
-                {SOURCES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <label className="flex items-center gap-2 pb-1.5 text-sm">
-              <input type="checkbox" checked={forceReview} onChange={(e) => setForceReview(e.target.checked)} />
-              Send everything to the approval queue instead of auto-sending
-            </label>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {runError && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">{runError}</p>}
+      {runError && (
+        <Alert variant="destructive">
+          <AlertDescription>{runError}</AlertDescription>
+        </Alert>
+      )}
       {runResult && (
-        <div className="rounded border bg-white px-4 py-3 text-sm">
-          <p className="font-medium">
-            Drafted {runResult.drafted}, auto-sent {runResult.sent}, skipped {runResult.skipped.length}.
-          </p>
-          {runResult.skipped.length > 0 && (
-            <ul className="mt-2 list-inside list-disc text-neutral-600">
-              {runResult.skipped.map((s, i) => (
-                <li key={i}>
-                  {s.dealerId}: {s.reason}
-                </li>
-              ))}
-            </ul>
-          )}
-          {runResult.drafted - runResult.sent > 0 && (
-            <p className="mt-2">
-              <Link href="/queue" className="font-medium underline">
-                {runResult.drafted - runResult.sent} draft(s) need review in the Approval Queue.
-              </Link>
+        <Card>
+          <CardContent className="text-sm">
+            <p className="font-medium">
+              Drafted {runResult.drafted}, auto-sent {runResult.sent}, skipped {runResult.skipped.length}.
             </p>
-          )}
-        </div>
-      )}
-
-      <div className="rounded border bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold">Import dealer list (CSV/XLSX)</h2>
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            className="rounded border px-2 py-1.5 text-sm"
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-          >
-            {SOURCES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            onChange={onFileChosen}
-            className="text-sm"
-            disabled={importBusy}
-          />
-        </div>
-
-        {importError && <p className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{importError}</p>}
-
-        {preview && (
-          <div className="mt-4 space-y-3 rounded border bg-neutral-50 p-3 text-sm">
-            <p>
-              {preview.rowCount} row(s) found. Suggested column mapping:
-            </p>
-            <ul className="list-inside list-disc text-neutral-700">
-              {Object.entries(preview.suggestedMapping).map(([field, col]) => (
-                <li key={field}>
-                  <span className="font-medium">{field}</span> ← {Array.isArray(col) ? col.join(', ') : col}
-                </li>
-              ))}
-            </ul>
-            {!preview.suggestedMapping.businessName && (
-              <p className="text-red-700">No business name column detected — import will fail.</p>
+            {runResult.skipped.length > 0 && (
+              <ul className="mt-2 list-inside list-disc text-muted-foreground">
+                {runResult.skipped.map((s, i) => (
+                  <li key={i}>
+                    {s.dealerId}: {s.reason}
+                  </li>
+                ))}
+              </ul>
             )}
-            <div className="flex gap-2">
-              <button
-                onClick={confirmImport}
-                disabled={importBusy || !preview.suggestedMapping.businessName}
-                className="rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {importBusy ? 'Importing…' : 'Confirm & Import'}
-              </button>
-              <button onClick={cancelImport} className="rounded border px-3 py-1.5 text-sm">
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {importResult && (
-          <p className="mt-3 rounded bg-green-50 px-3 py-2 text-sm text-green-800">
-            Created {importResult.createdCount}, duplicates {importResult.duplicateCount}, invalid{' '}
-            {importResult.invalidCount}, flagged for review {importResult.flaggedCount}.
-          </p>
-        )}
-      </div>
+            {runResult.drafted - runResult.sent > 0 && (
+              <p className="mt-2">
+                <Link href="/queue" className="font-medium underline">
+                  {runResult.drafted - runResult.sent} draft(s) need review in the Approval Queue.
+                </Link>
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center gap-2">
-        <label className="text-sm text-neutral-600">Pipeline stage:</label>
-        <select className="rounded border px-2 py-1.5 text-sm" value={stage} onChange={(e) => setStage(e.target.value)}>
-          <option value="">All</option>
-          {STAGES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <Label>Pipeline stage</Label>
+        <Select
+          items={STAGE_FILTER_ITEMS}
+          value={stage || '__all__'}
+          onValueChange={(v) => setStage(v === '__all__' ? '' : String(v))}
+        >
+          <SelectTrigger className="w-44">
+            <SelectValue placeholder="All" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All</SelectItem>
+            {STAGES.map((s) => (
+              <SelectItem key={s} value={s}>
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
-      {loadError && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">{loadError}</p>}
+      {loadError && (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      )}
 
-      <div className="overflow-x-auto rounded border bg-white">
-        <table className="w-full text-sm">
-          <thead className="border-b bg-neutral-50 text-left text-neutral-500">
-            <tr>
-              <th className="px-4 py-2 font-medium">
-                <input
-                  type="checkbox"
-                  checked={dealers !== null && dealers.length > 0 && selected.size === dealers.length}
-                  onChange={toggleSelectAllVisible}
-                  disabled={!dealers || dealers.length === 0}
-                />
-              </th>
-              <th className="px-4 py-2 font-medium">Business</th>
-              <th className="px-4 py-2 font-medium">City</th>
-              <th className="px-4 py-2 font-medium">Stage</th>
-              <th className="px-4 py-2 font-medium">Primary email</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dealers === null ? (
-              <tr>
-                <td className="px-4 py-4 text-neutral-500" colSpan={5}>
-                  Loading…
-                </td>
-              </tr>
-            ) : dealers.length === 0 ? (
-              <tr>
-                <td className="px-4 py-4 text-neutral-500" colSpan={5}>
-                  No dealers yet — import a list above to get started.
-                </td>
-              </tr>
-            ) : (
-              dealers.map((d) => (
-                <tr key={d.id} className="border-b last:border-0">
-                  <td className="px-4 py-2">
+      <Card className="py-0">
+        {dealers === null ? (
+          <div className="space-y-3 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        ) : dealers.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+              <Users className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="font-medium">No dealers yet</p>
+              <p className="text-sm text-muted-foreground">Import a CSV or XLSX list to get started.</p>
+            </div>
+            <Button onClick={() => setImportOpen(true)}>
+              <Upload /> Import Dealers
+            </Button>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    checked={dealers.length > 0 && selected.size === dealers.length}
+                    onChange={toggleSelectAllVisible}
+                  />
+                </TableHead>
+                <TableHead>Business</TableHead>
+                <TableHead>City</TableHead>
+                <TableHead>Stage</TableHead>
+                <TableHead>Primary email</TableHead>
+                <TableHead className="w-10" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {dealers.map((d) => (
+                <TableRow key={d.id}>
+                  <TableCell>
                     <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelected(d.id)} />
-                  </td>
-                  <td className="px-4 py-2">{d.businessName}</td>
-                  <td className="px-4 py-2">{[d.city, d.state].filter(Boolean).join(', ') || '—'}</td>
-                  <td className="px-4 py-2">
-                    <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium">{d.pipelineStage}</span>
-                  </td>
-                  <td className="px-4 py-2">{d.emails.find((e) => e.isPrimary)?.address ?? d.emails[0]?.address ?? '—'}</td>
-                </tr>
-              ))
+                  </TableCell>
+                  <TableCell>
+                    <Link href={`/dealers/${d.id}`} className="font-medium hover:underline">
+                      {d.businessName}
+                    </Link>
+                    {d.contactPersonName && (
+                      <span className="ml-2 text-xs text-muted-foreground">{d.contactPersonName}</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {[d.city, d.state].filter(Boolean).join(', ') || '—'}
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={stageBadgeClass(d.pipelineStage)}>{d.pipelineStage}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {d.emails.find((e) => e.isPrimary)?.address ?? d.emails[0]?.address ?? '—'}
+                  </TableCell>
+                  <TableCell>
+                    <Link href={`/dealers/${d.id}`}>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      <Dialog open={importOpen} onOpenChange={(open) => (open ? setImportOpen(true) : closeImportDialog())}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import dealer list</DialogTitle>
+            <DialogDescription>Upload a CSV or XLSX file. You&apos;ll confirm the column mapping before anything is created.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="space-y-1.5">
+                <Label>Source</Label>
+                <Select items={SOURCE_ITEMS} value={source} onValueChange={(v) => setSource(String(v))}>
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SOURCES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>File</Label>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  onChange={onFileChosen}
+                  className="text-sm"
+                  disabled={importBusy}
+                />
+              </div>
+            </div>
+
+            {importError && (
+              <Alert variant="destructive">
+                <AlertDescription>{importError}</AlertDescription>
+              </Alert>
             )}
-          </tbody>
-        </table>
-      </div>
+
+            {preview && (
+              <div className="space-y-3 rounded-lg border bg-muted/40 p-3 text-sm">
+                <p>{preview.rowCount} row(s) found. Suggested column mapping:</p>
+                <ul className="list-inside list-disc text-foreground/80">
+                  {Object.entries(preview.suggestedMapping).map(([field, col]) => (
+                    <li key={field}>
+                      <span className="font-medium">{field}</span> ← {Array.isArray(col) ? col.join(', ') : col}
+                    </li>
+                  ))}
+                </ul>
+                {!preview.suggestedMapping.businessName && (
+                  <p className="text-destructive">No business name column detected — import will fail.</p>
+                )}
+              </div>
+            )}
+
+            {importResult && (
+              <Alert>
+                <AlertDescription>
+                  Created {importResult.createdCount}, duplicates {importResult.duplicateCount}, invalid{' '}
+                  {importResult.invalidCount}, flagged for review {importResult.flaggedCount}.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeImportDialog}>
+              {importResult ? 'Close' : 'Cancel'}
+            </Button>
+            {preview && (
+              <Button onClick={confirmImport} disabled={importBusy || !preview.suggestedMapping.businessName}>
+                {importBusy ? 'Importing…' : 'Confirm & Import'}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
