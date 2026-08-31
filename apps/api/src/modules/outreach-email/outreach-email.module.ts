@@ -4,6 +4,7 @@ import { DraftingModule } from '../../core/drafting';
 import { AiModule } from '../../providers/ai';
 import { EmailModule } from '../../providers/email';
 import { OutreachEmailController } from './outreach-email.controller';
+import { OutreachEmailDashboardController } from './dashboard.controller';
 import { OutreachEmailService } from './outreach-email.service';
 import { ColdDraftService } from './cold-draft.service';
 import { EmailSendService, EMAIL_SEND_CONFIG, EmailSendConfig } from './send.service';
@@ -25,7 +26,7 @@ import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE 
   // visible. Importing the plain module again would create a second, disconnected
   // empty-rules instance — the exact bug that shipped once already this phase.
   imports: [AuditModule, DraftingModule, AiModule, EmailModule],
-  controllers: [OutreachEmailController],
+  controllers: [OutreachEmailController, OutreachEmailDashboardController],
   providers: [
     OutreachEmailService,
     ColdDraftService,

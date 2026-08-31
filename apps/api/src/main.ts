@@ -51,6 +51,13 @@ async function bootstrap() {
   // received, before JSON parsing. Nest captures them onto req.rawBody alongside the
   // normal parsed req.body; nothing else in the app reads rawBody.
   const app = await NestFactory.create(AppModule, { rawBody: true });
+  // Dashboard (apps/web) runs on a different port in dev; the session cookie is
+  // HttpOnly (§9A.1) so the browser must send it itself via `credentials: 'include'`,
+  // which requires CORS to name the origin explicitly and allow credentials.
+  app.enableCors({
+    origin: (process.env.WEB_ORIGIN ?? 'http://localhost:3000').split(','),
+    credentials: true,
+  });
   await app.listen(process.env.PORT ?? 3001);
 }
 
