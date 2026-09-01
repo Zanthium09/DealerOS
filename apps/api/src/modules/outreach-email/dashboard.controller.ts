@@ -9,6 +9,7 @@ import { OutreachEmailService } from './outreach-email.service';
 import type { ColdOutreachOptions } from './outreach-email.service';
 import { EmailSendService, SOURCE_MODULE } from './send.service';
 import { SequenceService } from './sequence.service';
+import { CustomDraftService } from './custom-draft.service';
 import type { OutreachSegmentFilter } from './eligibility';
 
 /**
@@ -32,6 +33,7 @@ export class OutreachEmailDashboardController {
     private readonly approval: ApprovalService,
     private readonly send: EmailSendService,
     private readonly sequence: SequenceService,
+    private readonly customDraft_: CustomDraftService,
   ) {}
 
   /**
@@ -55,6 +57,19 @@ export class OutreachEmailDashboardController {
       forceReview: body.forceReview === true,
     };
     return this.outreach.runColdOutreach(session.organizationId, options);
+  }
+
+  /** Free-text brief in, an AI-written draft out — always lands in the approval
+   *  queue, never auto-sends (custom-draft.service.ts explains why). */
+  @Post('custom-draft')
+  customDraft(@Body() body: { dealerId?: unknown; brief?: unknown }) {
+    if (typeof body?.dealerId !== 'string' || !body.dealerId) {
+      throw new BadRequestException('dealerId is required');
+    }
+    if (typeof body?.brief !== 'string' || !body.brief.trim()) {
+      throw new BadRequestException('brief is required');
+    }
+    return this.customDraft_.draft(body.dealerId, body.brief);
   }
 
   /** The approval queue, this channel only. Full dealer history lives at

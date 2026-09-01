@@ -13,5 +13,6 @@ export {
   renderVariable,
   containsFinancialTerms,
   placeholdersIn,
+  assertNoDigits,
 } from './variables';
 export type { Template, DraftVariable, DraftVariables } from './variables';

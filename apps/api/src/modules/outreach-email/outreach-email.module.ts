@@ -10,6 +10,7 @@ import { OutreachEmailDashboardController } from './dashboard.controller';
 import { ScheduleController } from './schedule.controller';
 import { TemplateController } from './template.controller';
 import { TemplateService } from './template.service';
+import { CustomDraftService } from './custom-draft.service';
 import { SuppressionController } from './suppression.controller';
 import { OutreachEmailService } from './outreach-email.service';
 import { ColdDraftService } from './cold-draft.service';
@@ -46,6 +47,7 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
     OutreachEmailService,
     ColdDraftService,
     TemplateService,
+    CustomDraftService,
     EmailSendService,
     SequenceService,
     OutreachEmailWebhookService,

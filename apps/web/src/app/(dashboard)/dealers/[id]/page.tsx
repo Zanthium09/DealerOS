@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Mail, Phone, MessageSquareText, ArrowUpRight, ArrowDownLeft, Save } from 'lucide-react';
+import { Mail, Phone, MessageSquareText, ArrowUpRight, ArrowDownLeft, Save, Sparkles } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { stageBadgeClass, statusBadgeClass, consentBadgeClass } from '@/lib/badge-styles';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -89,6 +89,11 @@ export default function DealerDetailPage() {
 
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
 
+  const [brief, setBrief] = useState('');
+  const [draftingCustom, setDraftingCustom] = useState(false);
+  const [customDraftError, setCustomDraftError] = useState<string | null>(null);
+  const [customDraftDone, setCustomDraftDone] = useState(false);
+
   const load = useCallback(() => {
     setLoadError(null);
     apiFetch<Dealer>(`/contacts/${id}`)
@@ -135,6 +140,29 @@ export default function DealerDetailPage() {
       setStageError(err instanceof ApiError ? err.message : 'Could not change stage');
     } finally {
       setSavingStage(false);
+    }
+  }
+
+  async function writeCustomDraft() {
+    if (!dealer || !brief.trim()) return;
+    setDraftingCustom(true);
+    setCustomDraftError(null);
+    setCustomDraftDone(false);
+    try {
+      await apiFetch('/outreach-email/custom-draft', {
+        method: 'POST',
+        body: JSON.stringify({ dealerId: dealer.id, brief }),
+      });
+      setBrief('');
+      setCustomDraftDone(true);
+      setTimeout(() => setCustomDraftDone(false), 4000);
+    } catch (err) {
+      // The backend's message is the useful part here — e.g. "contains a digit...
+      // rephrase the instructions to describe the offer without stating a figure" —
+      // show it as-is rather than a generic failure.
+      setCustomDraftError(err instanceof ApiError ? err.message : 'Could not generate a draft');
+    } finally {
+      setDraftingCustom(false);
     }
   }
 
@@ -326,6 +354,47 @@ export default function DealerDetailPage() {
               <Save /> {savingNotes ? 'Saving…' : 'Save notes'}
             </Button>
             {notesSaved && <span className="text-xs text-muted-foreground">Saved.</span>}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4" /> Write with AI
+          </CardTitle>
+          <CardDescription>
+            Describe what this email should say — tone, occasion, what to mention. The AI writes it, but it
+            can never state a number: no price, discount, date or quantity, in digits or words. Ask for the
+            offer without a figure, then add the real number yourself when you review it below — every AI
+            draft lands in the Approval Queue, it never sends on its own.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Textarea
+            rows={3}
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            placeholder="e.g. Check in after two quiet months, warm and personal tone, mention we've valued working with them."
+          />
+          {customDraftError && (
+            <Alert variant="destructive">
+              <AlertDescription>{customDraftError}</AlertDescription>
+            </Alert>
+          )}
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={writeCustomDraft} disabled={draftingCustom || !brief.trim()}>
+              <Sparkles /> {draftingCustom ? 'Writing…' : 'Write draft'}
+            </Button>
+            {customDraftDone && (
+              <span className="text-xs text-muted-foreground">
+                Draft created —{' '}
+                <Link href="/queue" className="underline">
+                  review it in the Approval Queue
+                </Link>
+                .
+              </span>
+            )}
           </div>
         </CardContent>
       </Card>
