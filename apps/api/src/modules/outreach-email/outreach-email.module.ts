@@ -18,6 +18,7 @@ import { EmailSendService, EMAIL_SEND_CONFIG, EmailSendConfig } from './send.ser
 import { SequenceService, SEQUENCE_STEPS, DEFAULT_SEQUENCE_STEPS_MS } from './sequence.service';
 import { OutreachEmailWebhookService } from './webhook.service';
 import { InboundEmailService } from './inbound.service';
+import { ResendInboundWebhookService } from './inbound-webhook.service';
 import { UnsubscribeEndpointService } from './unsubscribe-endpoint.service';
 import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE } from './ports';
 import { ScheduleService } from './schedule.service';
@@ -52,6 +53,7 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
     SequenceService,
     OutreachEmailWebhookService,
     InboundEmailService,
+    ResendInboundWebhookService,
     UnsubscribeEndpointService,
     ScheduleService,
     { provide: SEND_THROTTLE, useClass: AlwaysAllowThrottle },

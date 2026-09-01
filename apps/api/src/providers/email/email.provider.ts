@@ -38,12 +38,37 @@ export type EmailWebhookEvent = {
   occurredAt: Date;
 };
 
+/** Resend's inbound webhook is metadata-only (§6/§8) — the body is fetched
+ *  separately by id. `headers` carries In-Reply-To/References, which is what
+ *  message-id.ts threads a reply back to the send it answers. */
+export type InboundReceivedEmail = {
+  headers: Record<string, string>;
+  subject: string;
+  text: string | null;
+  html: string | null;
+  fromAddress: string;
+};
+
 export interface EmailProvider {
   send(params: SendEmailParams): Promise<{ providerMessageId: string }>;
   verifyDomain(domain: string): Promise<DomainVerification>;
   getDomainStatus(domain: string): Promise<DomainVerification>;
   /** Throws if the signature does not verify. Never trust an unsigned payload (§8). */
   parseWebhook(payload: unknown, signature: string): EmailWebhookEvent[];
+  /**
+   * A SEPARATE signing secret from parseWebhook's — inbound receiving is a distinct
+   * webhook endpoint in the provider's dashboard, with its own secret. Returns the
+   * provider's id for the received email (to fetch full content for) and an
+   * idempotency key, or null if this event type is not one this app processes.
+   * Throws if the signature does not verify (§8) — never trust an unsigned payload,
+   * inbound or outbound alike.
+   */
+  parseInboundWebhook(
+    rawBody: Buffer,
+    headers: Record<string, string>,
+  ): { providerEventId: string; emailId: string } | null;
+  /** Inbound webhooks are metadata-only; this fetches the actual message content. */
+  fetchReceivedEmail(emailId: string): Promise<InboundReceivedEmail>;
 }
 
 export const EMAIL_PROVIDER = 'EMAIL_PROVIDER';

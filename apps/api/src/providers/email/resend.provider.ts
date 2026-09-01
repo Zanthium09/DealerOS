@@ -4,6 +4,7 @@ import {
   EmailProvider,
   EmailProviderError,
   EmailWebhookEvent,
+  InboundReceivedEmail,
   SendEmailParams,
 } from './email.provider';
 
@@ -14,6 +15,10 @@ export class ResendProvider implements EmailProvider {
     private readonly apiKey = process.env.RESEND_API_KEY,
     private readonly webhookSecret = process.env.RESEND_WEBHOOK_SECRET,
     private readonly baseUrl = 'https://api.resend.com',
+    // A separate secret on purpose: Resend issues one per configured webhook
+    // endpoint, and inbound receiving is registered as its own endpoint in their
+    // dashboard, distinct from the outbound delivery-events one above.
+    private readonly inboundWebhookSecret = process.env.RESEND_INBOUND_WEBHOOK_SECRET,
   ) {}
 
   private requireKey(): string {
@@ -97,6 +102,85 @@ export class ResendProvider implements EmailProvider {
       },
     ];
   }
+
+  // Resend's inbound webhook uses the real Svix scheme: HMAC-SHA256 over
+  // `${svix-id}.${svix-timestamp}.${rawBody}`, unlike parseWebhook above which
+  // (pre-existing, untouched here) verifies against the body alone. This is over the
+  // genuine raw bytes (§8 — a re-serialised body will not match), which is why the
+  // controller must pass the untouched Buffer Nest captured before JSON parsing.
+  parseInboundWebhook(
+    rawBody: Buffer,
+    headers: Record<string, string>,
+  ): { providerEventId: string; emailId: string } | null {
+    if (!this.inboundWebhookSecret) throw new EmailProviderError('RESEND_INBOUND_WEBHOOK_SECRET is not set');
+    const h = (name: string) => headers[name] ?? headers[name.toLowerCase()];
+    const svixId = h('svix-id');
+    const svixTimestamp = h('svix-timestamp');
+    const svixSignature = h('svix-signature');
+    if (!svixId || !svixTimestamp || !svixSignature) {
+      throw new EmailProviderError('missing svix-id/svix-timestamp/svix-signature headers (§8)');
+    }
+
+    const secretKey = Buffer.from(this.inboundWebhookSecret.replace(/^whsec_/, ''), 'base64');
+    const signedContent = `${svixId}.${svixTimestamp}.${rawBody.toString('utf8')}`;
+    const expected = createHmac('sha256', secretKey).update(signedContent).digest('base64');
+    // svix-signature can carry multiple space-separated `v1,<sig>` values (secret
+    // rotation); any one matching is enough.
+    const given = svixSignature
+      .split(' ')
+      .map((s) => s.split(',')[1])
+      .filter(Boolean);
+    const a = Buffer.from(expected);
+    const verified = given.some((g) => {
+      const b = Buffer.from(g);
+      return a.length === b.length && timingSafeEqual(a, b);
+    });
+    if (!verified) throw new EmailProviderError('Resend inbound webhook signature does not verify (§8)');
+
+    const body = JSON.parse(rawBody.toString('utf8'));
+    if (body.type !== 'email.received') return null;
+    const emailId = body.data?.email_id;
+    if (!emailId) return null;
+    return { providerEventId: `email.received:${emailId}`, emailId };
+  }
+
+  async fetchReceivedEmail(emailId: string): Promise<InboundReceivedEmail> {
+    const res = await fetch(`${this.baseUrl}/emails/receiving/${emailId}`, {
+      headers: { Authorization: `Bearer ${this.requireKey()}` },
+    });
+    if (!res.ok) throw new EmailProviderError(`Resend fetchReceivedEmail failed: ${res.status}`);
+    const body = (await res.json()) as {
+      headers?: Record<string, string>;
+      subject?: string;
+      text?: string | null;
+      html?: string | null;
+      from?: string;
+    };
+    return {
+      headers: body.headers ?? {},
+      subject: body.subject ?? '',
+      text: body.text ?? null,
+      html: body.html ?? null,
+      fromAddress: body.from ?? '',
+    };
+  }
+}
+
+/** ponytail: a tag-stripping regex, not an HTML parser — good enough to get plain
+ *  text out of a reply for classification/threading when a sender's client only sent
+ *  HTML with no text part. Upgrade to a real HTML-to-text library if a reply's
+ *  formatting ever needs to be preserved rather than just read. */
+export function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
 }
 
 function mapStatus(s: string): DomainVerification['status'] {

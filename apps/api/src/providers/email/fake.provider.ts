@@ -5,6 +5,7 @@ import {
   EmailProviderError,
   EmailWebhookEvent,
   EmailWebhookEventType,
+  InboundReceivedEmail,
   SendEmailParams,
 } from './email.provider';
 
@@ -47,6 +48,43 @@ export class FakeEmailProvider implements EmailProvider {
     }
     return payload as EmailWebhookEvent[];
   }
+
+  /** Test-settable: what fetchReceivedEmail returns for a given emailId. */
+  readonly receivedEmails = new Map<string, InboundReceivedEmail>();
+
+  // Same contract as the real provider: a fixed valid signature, wrong/missing
+  // headers throw. The payload IS the parsed body already (tests build it directly),
+  // so there is no JSON.parse step to fake.
+  parseInboundWebhook(
+    rawBody: Buffer,
+    headers: Record<string, string>,
+  ): { providerEventId: string; emailId: string } | null {
+    const sig = headers['svix-signature'] ?? headers['x-fake-signature'];
+    if (sig !== 'v1,test-inbound-signature') {
+      throw new EmailProviderError('fake inbound webhook signature does not verify (§8)');
+    }
+    const body = JSON.parse(rawBody.toString('utf8'));
+    if (body.type !== 'email.received') return null;
+    const emailId = body.data?.email_id;
+    if (!emailId) return null;
+    return { providerEventId: `email.received:${emailId}`, emailId };
+  }
+
+  async fetchReceivedEmail(emailId: string): Promise<InboundReceivedEmail> {
+    const found = this.receivedEmails.get(emailId);
+    if (!found) throw new EmailProviderError(`fake: no received email ${emailId} set up`);
+    return found;
+  }
+}
+
+/** Builds a fake inbound webhook's raw body + headers, matching the real Svix shape
+ *  closely enough for the controller/service under test to exercise the real path. */
+export function fakeInboundWebhookRequest(emailId: string): { rawBody: Buffer; headers: Record<string, string> } {
+  const body = JSON.stringify({ type: 'email.received', created_at: new Date().toISOString(), data: { email_id: emailId } });
+  return {
+    rawBody: Buffer.from(body, 'utf8'),
+    headers: { 'svix-id': 'msg_fake', 'svix-timestamp': `${Math.floor(Date.now() / 1000)}`, 'svix-signature': 'v1,test-inbound-signature' },
+  };
 }
 
 /** Builds a webhook payload for a message this fake actually sent. */
