@@ -74,7 +74,7 @@ describe('sendApprovedDraft — the happy path', () => {
     assert.equal(event.body, 'Hello, we would love to work with you.');
     assert.equal(email.sent.length, 1);
     assert.equal(email.sent[0].to, 'owner@sharmatraders.example');
-    assert.equal(email.sent[0].from, `hello@${DOMAIN}`);
+    assert.equal(email.sent[0].from, `sales@${DOMAIN}`);
 
     // §6 — one-click unsubscribe, header AND link.
     assert.match(email.sent[0].headers['List-Unsubscribe'], /^<https:\/\/app\.test\/outreach-email\/unsubscribe\?token=/);

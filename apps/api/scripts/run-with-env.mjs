@@ -6,7 +6,14 @@
 // no dependency) and then spawns whatever command was actually asked for.
 //
 //   node scripts/run-with-env.mjs nest start --watch
-process.loadEnvFile('../../.env');
+//
+// Deploy hosts (Railway/Render) inject env vars directly into the process and ship
+// no .env file at all — loadEnvFile throws ENOENT there, which must not be fatal.
+try {
+  process.loadEnvFile('../../.env');
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+}
 
 import { spawn } from 'node:child_process';
 

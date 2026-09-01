@@ -132,7 +132,7 @@ export class EmailSendService {
     let providerMessageId: string;
     try {
       const result = await this.email.send({
-        from: `hello@${identity.domain}`,
+        from: `sales@${identity.domain}`,
         to: dealerEmail.address,
         subject: `A note about your business`,
         text: draft.draftText,
