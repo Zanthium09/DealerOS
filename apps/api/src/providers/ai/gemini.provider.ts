@@ -40,7 +40,16 @@ export class GeminiProvider implements AIProvider {
       body: JSON.stringify({
         system_instruction: { parts: [{ text: params.system }] },
         contents: [{ role: 'user', parts: [{ text: params.prompt }] }],
-        generationConfig: { maxOutputTokens: params.maxTokens ?? 1024 },
+        generationConfig: {
+          maxOutputTokens: params.maxTokens ?? 1024,
+          // Gemini 2.5's "thinking" tokens draw from the SAME budget as the visible
+          // reply — on some requests thinking eats enough of it that the actual
+          // rewritten email gets cut off mid-sentence, with finishReason still
+          // "MAX_TOKENS" but *some* content present, so the old check below let it
+          // through. This task is a short rewrite, not multi-step reasoning: thinking
+          // buys nothing here and only competes with the answer for tokens.
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
     });
 
@@ -52,12 +61,11 @@ export class GeminiProvider implements AIProvider {
       candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
     };
     const candidate = body.candidates?.[0];
-    // MAX_TOKENS with no text back means the reply was cut off before any content —
-    // worth a distinct message, since "empty completion" alone would send someone
-    // hunting for the wrong bug (a bad prompt) instead of the right one (raise
-    // maxTokens).
-    if (candidate?.finishReason === 'MAX_TOKENS' && !candidate.content?.parts?.length) {
-      throw new Error('gemini: response truncated before any content — raise maxTokens');
+    // Any MAX_TOKENS finish is a truncated reply, not a complete one — with or
+    // without partial text. A half-written cold email is worse than an outright
+    // failure: a failure surfaces, a truncated draft can slip through approval.
+    if (candidate?.finishReason === 'MAX_TOKENS') {
+      throw new Error('gemini: response truncated by the token limit — raise maxTokens');
     }
     const text = (candidate?.content?.parts ?? [])
       .map((p) => p.text ?? '')
