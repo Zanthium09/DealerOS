@@ -53,6 +53,15 @@ const SOURCES = ['MANUAL', 'IMPORTED_LIST', 'TRADE_FAIR', 'INQUIRY', 'REFERRAL',
 
 // Base UI's <SelectValue> only renders the selected item's label (instead of the
 // raw value) when the Root is given this `items` map — see @base-ui/react/select.
+const SORT_ITEMS = [
+  { value: 'newest', label: 'Newest first' },
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'name', label: 'Name A–Z' },
+  { value: 'nameDesc', label: 'Name Z–A' },
+  { value: 'city', label: 'City' },
+  { value: 'stage', label: 'Pipeline stage' },
+];
+
 const STAGE_FILTER_ITEMS = { __all__: 'All', ...Object.fromEntries(STAGES.map((s) => [s, s])) };
 const SOURCE_ITEMS = Object.fromEntries(SOURCES.map((s) => [s, s]));
 const SOURCE_FILTER_ITEMS = { __any__: 'Any', ...SOURCE_ITEMS };
@@ -69,6 +78,10 @@ function fileToBase64(file: File): Promise<string> {
 export default function DealersPage() {
   const [dealers, setDealers] = useState<Dealer[] | null>(null);
   const [stage, setStage] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sort, setSort] = useState('newest');
+  const [total, setTotal] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [hasVerifiedIdentity, setHasVerifiedIdentity] = useState<boolean | null>(null);
@@ -95,12 +108,26 @@ export default function DealersPage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState(false);
 
+  // Debounced so typing a company name does not fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const load = useCallback(() => {
     setLoadError(null);
-    apiFetch<Dealer[]>(`/contacts${stage ? `?pipelineStage=${stage}` : ''}`)
+    const params = new URLSearchParams();
+    if (stage) params.set('pipelineStage', stage);
+    if (debouncedSearch) params.set('search', debouncedSearch);
+    if (sort) params.set('sort', sort);
+    const qs = params.toString();
+    apiFetch<Dealer[]>(`/contacts${qs ? `?${qs}` : ''}`)
       .then(setDealers)
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load dealers'));
-  }, [stage]);
+    apiFetch<{ total: number }>(`/contacts/count${qs ? `?${qs}` : ''}`)
+      .then((r) => setTotal(r.total))
+      .catch(() => setTotal(null));
+  }, [stage, debouncedSearch, sort]);
 
   useEffect(() => {
     load();
@@ -353,6 +380,12 @@ export default function DealersPage() {
       )}
 
       <div className="flex items-center gap-2">
+        <Input
+          placeholder="Search name, contact, city, email…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-64"
+        />
         <Label>Pipeline stage</Label>
         <Select
           items={STAGE_FILTER_ITEMS}
@@ -371,6 +404,24 @@ export default function DealersPage() {
             ))}
           </SelectContent>
         </Select>
+        <Select items={SORT_ITEMS} value={sort} onValueChange={(v) => v && setSort(String(v))}>
+          <SelectTrigger className="w-40">
+            <SelectValue placeholder="Sort" />
+          </SelectTrigger>
+          <SelectContent>
+            {SORT_ITEMS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {total !== null && (
+          <span className="text-sm text-muted-foreground">
+            {total.toLocaleString()} match{total === 1 ? '' : 'es'}
+            {dealers && total > dealers.length ? ` · showing ${dealers.length}` : ''}
+          </span>
+        )}
       </div>
 
       {loadError && (
