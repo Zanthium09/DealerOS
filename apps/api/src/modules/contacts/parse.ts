@@ -38,9 +38,20 @@ function toParsed(matrix: unknown[][]): Parsed {
   };
 }
 
+// Without an explicit `sheet` option, readXlsxFile returns one
+// `{ sheet: name, data: Row[] }` entry per sheet in the workbook, not a flat
+// row array — easy to miss since the common single-sheet case still "looks like"
+// an array. We only ever want the first sheet.
+export function firstSheetRows(result: unknown): unknown[][] {
+  if (Array.isArray(result) && result.length > 0 && result[0] && typeof result[0] === 'object' && 'data' in (result[0] as object)) {
+    return (result[0] as { data: unknown[][] }).data;
+  }
+  return result as unknown[][];
+}
+
 export async function parseFile(filename: string, buffer: Buffer): Promise<Parsed> {
   if (/\.xlsx?$/i.test(filename)) {
-    return toParsed((await readXlsxFile(buffer as never)) as unknown as unknown[][]);
+    return toParsed(firstSheetRows(await readXlsxFile(buffer as never)));
   }
   return toParsed(
     parse(buffer, {

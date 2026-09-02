@@ -1,7 +1,7 @@
 // M1 parsing and normalisation (§5.1). Pure functions — no database needed.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFile } from '../../src/modules/contacts/parse';
+import { firstSheetRows, parseFile } from '../../src/modules/contacts/parse';
 import {
   normalizePhone,
   normalizeRow,
@@ -43,6 +43,21 @@ describe('CSV parsing edge cases', () => {
     const { rows } = await parseFile('x.csv', csv('a,b,c\n1,2\n1,2,3,4\n'));
     assert.equal(rows.length, 2);
     assert.equal(rows[0].c, '');
+  });
+});
+
+describe('XLSX sheet-shape handling', () => {
+  test('unwraps read-excel-file\'s per-sheet { sheet, data } shape', () => {
+    const rows = firstSheetRows([
+      { sheet: 'Sheet1', data: [['Business Name', 'City'], ['Acme', 'Pune']] },
+      { sheet: 'Sheet2', data: [['ignored']] },
+    ]);
+    assert.deepEqual(rows, [['Business Name', 'City'], ['Acme', 'Pune']]);
+  });
+
+  test('passes a flat row array through unchanged', () => {
+    const flat = [['Business Name', 'City'], ['Acme', 'Pune']];
+    assert.deepEqual(firstSheetRows(flat), flat);
   });
 });
 
