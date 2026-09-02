@@ -144,6 +144,61 @@ export class OutreachEmailDashboardController {
     });
   }
 
+  /**
+   * One row per message, not per event.
+   *
+   * Webhooks append a new InteractionEvent for every delivery touch, so a single
+   * email that was delivered and then opened is three rows — which makes the Sent
+   * list unreadable and the counts wrong (three "emails" for one send). This groups
+   * by providerMessageId and reports the furthest state each message reached, with
+   * its own event timeline.
+   */
+  @Get('messages')
+  async messages(@Query('take') take?: string) {
+    const events = await this.prisma.interactionEvent.findMany({
+      where: { channel: 'EMAIL' },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Number(take) || 1000, 2000),
+      include: { dealer: { select: { businessName: true } } },
+    });
+
+    const byMessage = new Map<string, typeof events>();
+    for (const e of events) {
+      // A FAILED send never reached the provider, so it has no message id — key it
+      // by its own id so it still appears as its own message rather than merging
+      // every failure into one bucket.
+      const key = e.providerMessageId ?? `local:${e.id}`;
+      const list = byMessage.get(key) ?? [];
+      list.push(e);
+      byMessage.set(key, list);
+    }
+
+    return [...byMessage.values()]
+      .map((list) => {
+        const oldest = list[list.length - 1];
+        const best = list.reduce((a, b) => (STATUS_RANK[b.status] > STATUS_RANK[a.status] ? b : a));
+        const failure = list.find((e) => e.errorText);
+        return {
+          id: oldest.id,
+          dealerId: oldest.dealerId,
+          dealer: oldest.dealer,
+          direction: oldest.direction,
+          providerMessageId: oldest.providerMessageId,
+          subject: list.find((e) => e.subject)?.subject ?? '',
+          toAddress: list.find((e) => e.toAddress)?.toAddress ?? '',
+          body: list.find((e) => e.body)?.body ?? '',
+          status: best.status,
+          errorText: failure?.errorText ?? null,
+          sentAt: oldest.createdAt,
+          lastEventAt: list[0].createdAt,
+          timeline: list
+            .map((e) => ({ status: e.status, at: e.createdAt }))
+            .sort((a, b) => a.at.getTime() - b.at.getTime()),
+        };
+      })
+      .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+  }
+
   /** Outbound controls: throttle on/off, daily limit, pacing, channel pause (§12.6). */
   @Get('settings')
   async settings(@CurrentTenantSession() session: TenantSession) {
@@ -332,3 +387,20 @@ function toAddressList(value: unknown): string[] {
 function finiteOrNull(n: number): number | null {
   return Number.isFinite(n) ? n : null;
 }
+
+/**
+ * How far along the delivery funnel each status is. Used to pick the single status
+ * that best describes a message from its several events — REPLIED beats OPENED beats
+ * DELIVERED, and a hard failure outranks them all because it is the thing you must
+ * act on.
+ */
+const STATUS_RANK: Record<string, number> = {
+  SENT: 1,
+  DELIVERED: 2,
+  OPENED: 3,
+  CLICKED: 4,
+  REPLIED: 5,
+  COMPLAINED: 6,
+  BOUNCED: 7,
+  FAILED: 8,
+};

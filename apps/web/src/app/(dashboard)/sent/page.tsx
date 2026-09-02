@@ -38,6 +38,9 @@ type Interaction = {
   createdAt: string;
   providerMessageId: string | null;
   dealer: { businessName: string } | null;
+  sentAt: string;
+  lastEventAt: string;
+  timeline: { status: string; at: string }[];
 };
 
 type FailedDraft = {
@@ -87,8 +90,8 @@ export default function SentPage() {
   const [retrying, setRetrying] = useState<string | null>(null);
 
   function load() {
-    apiFetch<Interaction[]>('/outreach-email/interactions')
-      .then(setInteractions)
+    apiFetch<Interaction[]>('/outreach-email/messages')
+      .then((rows) => setInteractions(rows.map((r) => ({ ...r, createdAt: r.sentAt ?? r.createdAt }))))
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load history'));
     apiFetch<FailedDraft[]>('/outreach-email/failed')
       .then(setFailed)
@@ -326,6 +329,16 @@ export default function SentPage() {
                   {openItem.subject}
                 </p>
               )}
+            </div>
+          )}
+          {openItem && openItem.timeline?.length > 1 && (
+            <div className="flex flex-wrap gap-1.5">
+              {openItem.timeline.map((t, idx) => (
+                <Badge key={`${t.status}-${idx}`} variant="outline" className="gap-1 text-xs font-normal">
+                  {t.status}
+                  <span className="text-muted-foreground">{new Date(t.at).toLocaleTimeString()}</span>
+                </Badge>
+              ))}
             </div>
           )}
           {openItem?.errorText && (
