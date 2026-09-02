@@ -10,6 +10,7 @@ import type { ColdOutreachOptions } from './outreach-email.service';
 import { EmailSendService, SOURCE_MODULE } from './send.service';
 import { SequenceService } from './sequence.service';
 import { CustomDraftService } from './custom-draft.service';
+import { renderPlain } from './cold-draft.service';
 import { OutreachSettingsService } from './settings.service';
 import type { OutreachSettingsInput } from './settings.service';
 import { EmailSendThrottle } from './throttle.impl';
@@ -197,6 +198,37 @@ export class OutreachEmailDashboardController {
         };
       })
       .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+  }
+
+  /**
+   * Fills in a subject on drafts written before subjects existed, so a batch of
+   * them does not all go out under the same fallback line. Uses the active
+   * template's subject where there is one, else the per-recipient default.
+   */
+  @Post('drafts/backfill-subjects')
+  async backfillSubjects() {
+    const active = await this.prisma.outreachTemplate.findFirst({ where: { isActive: true } });
+    const pattern = active?.subject?.trim() || 'Dealer partnership enquiry — {{businessName}}';
+
+    const drafts = await this.prisma.messageDraft.findMany({
+      where: { sourceModule: SOURCE_MODULE, subject: '', status: { in: ['PENDING', 'APPROVED'] } },
+      include: { dealer: { select: { businessName: true, city: true, state: true, contactPersonName: true } } },
+    });
+
+    const org = await this.prisma.organization.findFirst({ where: { id: getOrgId()! } });
+    let updated = 0;
+    for (const d of drafts) {
+      const subject = renderPlain(pattern, {
+        businessName: d.dealer?.businessName ?? '',
+        contactName: d.dealer?.contactPersonName ?? 'Sir/Madam',
+        ourBusinessName: org?.name ?? '',
+        city: d.dealer?.city ?? '',
+        state: d.dealer?.state ?? '',
+      });
+      await this.prisma.messageDraft.update({ where: { id: d.id }, data: { subject } });
+      updated++;
+    }
+    return { updated };
   }
 
   /** Outbound controls: throttle on/off, daily limit, pacing, channel pause (§12.6). */

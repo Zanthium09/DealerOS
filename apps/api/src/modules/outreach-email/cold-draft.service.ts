@@ -92,7 +92,13 @@ export class ColdDraftService {
   }
 }
 
-const DEFAULT_SUBJECT_TEMPLATE = 'Dealer partnership — {{ourBusinessName}}';
+/**
+ * Keyed on the RECIPIENT's name, not ours, so the subject differs on every send.
+ * A batch of cold emails sharing one byte-identical subject is the pattern bulk
+ * filters look for — which is what the previous hardcoded "A note about your
+ * business" was, on every message the app had ever sent.
+ */
+const DEFAULT_SUBJECT_TEMPLATE = 'Dealer partnership enquiry — {{businessName}}';
 
 function placeholderNeeded(skeleton: string, key: string): boolean {
   return skeleton.includes(`{{${key}}}`);
