@@ -5,10 +5,17 @@
 // which InteractionEvent a provider webhook belongs to — no cross-org database lookup
 // is ever needed to process one (see send.service.ts / webhook.service.ts).
 export type SendEmailParams = {
+  /** Either a bare address or a display form: `"Name" <user@domain>`. */
   from: string;
   to: string;
+  cc?: string[];
+  bcc?: string[];
+  replyTo?: string;
   subject: string;
   text: string;
+  /** Optional HTML alternative. When set the provider sends multipart, so a client
+   *  that cannot render HTML still gets `text`. */
+  html?: string;
   /** e.g. List-Unsubscribe, List-Unsubscribe-Post, Message-ID (§6). */
   headers: Record<string, string>;
   /** Echoed back verbatim on every webhook event for this message. Never PII — see

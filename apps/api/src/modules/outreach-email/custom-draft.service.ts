@@ -5,6 +5,7 @@ import { getOrgId } from '../../core/tenancy/tenancy';
 import { AI_PROVIDER, AIProvider } from '../../providers/ai/ai.provider';
 import { DraftingError, assertNoDigits } from '../../core/drafting';
 import { SOURCE_MODULE } from './send.service';
+import { renderPlain } from './cold-draft.service';
 
 /**
  * "Give the AI free-text context and let it write the email" — the feature this
@@ -86,11 +87,65 @@ export class CustomDraftService {
         organizationId: getOrgId()!,
         dealerId,
         sourceModule: SOURCE_MODULE,
+        subject: `Regarding ${dealer.businessName}`,
         draftText: draftText.trim(),
         templateVariables: { brief: brief.trim(), custom: true },
         containsFinancialTerms: false,
         // Unconditional — see the class doc. This path never qualifies for auto-send.
         requiresApproval: true,
+      },
+    });
+  }
+
+  /**
+   * A human-composed message to one dealer. No model is involved at any point, so
+   * §1.4 does not bite: its subject is what the *model* may write, and here the
+   * model writes nothing. A staff member typing "₹5,000 credit limit" is §1.5
+   * working exactly as designed — a human committing to a number they can see.
+   *
+   * {{placeholders}} are substituted from that dealer's own database columns, which
+   * keeps personalisation on the same "values come from the database" footing as
+   * every other path.
+   */
+  async compose(input: {
+    dealerId: string;
+    subject: string;
+    bodyText: string;
+    bodyHtml?: string | null;
+    cc?: string[];
+    bcc?: string[];
+  }): Promise<MessageDraft> {
+    const dealer = await this.prisma.dealer.findFirst({ where: { id: input.dealerId } });
+    if (!dealer) throw new BadRequestException(`no dealer ${input.dealerId} in this organization`);
+    const org = await this.prisma.organization.findFirst({ where: { id: getOrgId()! } });
+    if (!org) throw new BadRequestException('organization not found');
+
+    const variables: Record<string, string> = {
+      businessName: dealer.businessName,
+      contactName: dealer.contactPersonName ?? 'Sir/Madam',
+      ourBusinessName: org.name,
+      city: dealer.city ?? '',
+      state: dealer.state ?? '',
+      region: dealer.region ?? '',
+      businessCategory: dealer.businessCategory ?? '',
+    };
+
+    return this.prisma.messageDraft.create({
+      data: {
+        organizationId: getOrgId()!,
+        dealerId: input.dealerId,
+        sourceModule: SOURCE_MODULE,
+        subject: renderPlain(input.subject.trim(), variables),
+        draftText: renderPlain(input.bodyText.trim(), variables),
+        bodyHtml: input.bodyHtml ? renderPlain(input.bodyHtml, variables) : null,
+        ccEmails: input.cc ?? [],
+        bccEmails: input.bcc ?? [],
+        templateVariables: { ...variables, composedByHuman: 'true' },
+        containsFinancialTerms: false,
+        // Already authored and reviewed by the person sending it; the caller decides
+        // whether to dispatch immediately or leave it in the queue.
+        requiresApproval: false,
+        autoSendRuleId: 'human-composed',
       },
     });
   }

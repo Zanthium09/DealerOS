@@ -2,6 +2,7 @@ import { Module, OnApplicationBootstrap, OnModuleDestroy, Inject } from '@nestjs
 import { ConnectionOptions, Queue, Worker } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { AuditModule } from '../../core/audit';
+import { KillSwitchModule } from '../../core/killswitch';
 import { DraftingModule } from '../../core/drafting';
 import { AiModule } from '../../providers/ai';
 import { EmailModule } from '../../providers/email';
@@ -20,7 +21,9 @@ import { OutreachEmailWebhookService } from './webhook.service';
 import { InboundEmailService } from './inbound.service';
 import { ResendInboundWebhookService } from './inbound-webhook.service';
 import { UnsubscribeEndpointService } from './unsubscribe-endpoint.service';
-import { AlwaysAllowThrottle, KILL_SWITCH, NeverPausedKillSwitch, SEND_THROTTLE } from './ports';
+import { KILL_SWITCH, SEND_THROTTLE } from './ports';
+import { OutreachSettingsService } from './settings.service';
+import { EmailKillSwitch, EmailSendThrottle } from './throttle.impl';
 import { ScheduleService } from './schedule.service';
 import { createScheduleQueue, createScheduleWorker, reconcileSchedules } from './schedule-queue';
 import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
@@ -36,7 +39,7 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
   // global (approval.module.ts), so ApprovalService/AUTO_SEND_RULES are already
   // visible. Importing the plain module again would create a second, disconnected
   // empty-rules instance — the exact bug that shipped once already this phase.
-  imports: [AuditModule, DraftingModule, AiModule, EmailModule],
+  imports: [AuditModule, DraftingModule, AiModule, EmailModule, KillSwitchModule],
   controllers: [
     OutreachEmailController,
     OutreachEmailDashboardController,
@@ -56,8 +59,15 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
     ResendInboundWebhookService,
     UnsubscribeEndpointService,
     ScheduleService,
-    { provide: SEND_THROTTLE, useClass: AlwaysAllowThrottle },
-    { provide: KILL_SWITCH, useClass: NeverPausedKillSwitch },
+    OutreachSettingsService,
+    EmailSendThrottle,
+    EmailKillSwitch,
+    // The real implementations. These two ports were still bound to
+    // AlwaysAllowThrottle / NeverPausedKillSwitch — placeholders from before
+    // core/throttle and core/killswitch existed — which meant that in production
+    // neither the throttle nor the kill switch did anything at all.
+    { provide: SEND_THROTTLE, useExisting: EmailSendThrottle },
+    { provide: KILL_SWITCH, useExisting: EmailKillSwitch },
     { provide: SEQUENCE_STEPS, useValue: DEFAULT_SEQUENCE_STEPS_MS },
     {
       provide: EMAIL_SEND_CONFIG,

@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import { TriangleAlert, Trash2, Pencil, Mail } from 'lucide-react';
+import { SendingControlsSection } from './sending-controls';
 
 type SendingIdentity = {
   id: string;
@@ -27,7 +28,9 @@ type SendingIdentity = {
 type Template = {
   id: string;
   name: string;
+  subject: string;
   bodyText: string;
+  useAi: boolean;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -41,21 +44,27 @@ type SuppressionRow = {
   createdAt: string;
 };
 
-const PLACEHOLDERS = ['{{contactName}}', '{{ourBusinessName}}', '{{businessName}}'];
+const PLACEHOLDERS = ['{{contactName}}', '{{ourBusinessName}}', '{{businessName}}', '{{city}}', '{{state}}', '{{region}}', '{{businessCategory}}'];
 
 export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Sending identities, email wording, and the suppression list.</p>
+        <p className="text-sm text-muted-foreground">
+          Sending limits, identities, email wording, and the suppression list.
+        </p>
       </div>
-      <Tabs defaultValue="identities">
+      <Tabs defaultValue="sending">
         <TabsList>
+          <TabsTrigger value="sending">Sending Controls</TabsTrigger>
           <TabsTrigger value="identities">Sending Identities</TabsTrigger>
           <TabsTrigger value="templates">Email Templates</TabsTrigger>
           <TabsTrigger value="suppressions">Suppression List</TabsTrigger>
         </TabsList>
+        <TabsContent value="sending" className="mt-4">
+          <SendingControlsSection />
+        </TabsContent>
         <TabsContent value="identities" className="mt-4">
           <IdentitiesSection />
         </TabsContent>
@@ -277,7 +286,9 @@ function TemplatesSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
   const [name, setName] = useState('');
+  const [subject, setSubject] = useState('');
   const [bodyText, setBodyText] = useState('');
+  const [useAi, setUseAi] = useState(true);
   const [isActive, setIsActive] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -296,7 +307,9 @@ function TemplatesSection() {
   function startNew() {
     setEditingId('new');
     setName('');
+    setSubject('');
     setBodyText('');
+    setUseAi(true);
     setIsActive(true);
     setSaveError(null);
   }
@@ -304,7 +317,9 @@ function TemplatesSection() {
   function startEdit(t: Template) {
     setEditingId(t.id);
     setName(t.name);
+    setSubject(t.subject ?? '');
     setBodyText(t.bodyText);
+    setUseAi(t.useAi ?? true);
     setIsActive(t.isActive);
     setSaveError(null);
   }
@@ -332,13 +347,13 @@ function TemplatesSection() {
       if (editingId === 'new') {
         await apiFetch('/outreach-email/templates', {
           method: 'POST',
-          body: JSON.stringify({ name, bodyText, isActive }),
+          body: JSON.stringify({ name, subject, bodyText, useAi, isActive }),
         });
         toast.success('Template created.');
       } else if (editingId) {
         await apiFetch(`/outreach-email/templates/${editingId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name, bodyText, isActive }),
+          body: JSON.stringify({ name, subject, bodyText, useAi, isActive }),
         });
         toast.success('Template updated.');
       }
@@ -429,6 +444,34 @@ function TemplatesSection() {
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Friendly opener" />
             </div>
             <div className="space-y-1">
+              <Label>Subject line</Label>
+              <Input
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Dealer partnership — {{ourBusinessName}}"
+              />
+              <p className="text-xs text-muted-foreground">
+                Every email used to share one fixed subject, which lands in spam. Give each template its own, and
+                use placeholders to vary it per company.
+              </p>
+            </div>
+            <label className="flex items-start gap-2 rounded-lg border p-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 accent-primary"
+                checked={useAi}
+                onChange={(e) => setUseAi(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Let AI rewrite this for tone</span>
+                <span className="block text-xs text-muted-foreground">
+                  On: the AI rephrases your wording per dealer, and digits are not allowed anywhere outside a
+                  placeholder. Off: your text is sent exactly as written, so you can use numbers freely
+                  (&ldquo;24x7&rdquo;, &ldquo;since 1995&rdquo;, GST numbers).
+                </span>
+              </span>
+            </label>
+            <div className="space-y-1">
               <Label>Body</Label>
               <div className="flex flex-wrap gap-1.5">
                 {PLACEHOLDERS.map((p) => (
@@ -450,7 +493,9 @@ function TemplatesSection() {
                 placeholder={`Hi {{contactName}},\n\nI'm reaching out from {{ourBusinessName}}...`}
               />
               <p className="text-xs text-muted-foreground">
-                Available: {'{{contactName}}'}, {'{{ourBusinessName}}'}, {'{{businessName}}'}. No digits anywhere else.
+                Available: {'{{contactName}}'}, {'{{ourBusinessName}}'}, {'{{businessName}}'}, {'{{city}}'},{' '}
+                {'{{state}}'}, {'{{region}}'}, {'{{businessCategory}}'}.
+                {useAi ? ' No digits anywhere else while AI rewriting is on.' : ' Numbers are allowed — AI rewriting is off.'}
               </p>
             </div>
             <label className="flex items-center gap-2 text-sm">

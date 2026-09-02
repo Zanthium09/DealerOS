@@ -111,6 +111,7 @@ model Organization {
   campaigns           Campaign[]
   outreachSchedules   OutreachSchedule[]
   outreachTemplates   OutreachTemplate[]
+  outreachSettings    OutreachSettings?
 }
 
 model User {
@@ -296,17 +297,28 @@ model MessageDraft {
   dealerId       String
   sourceModule   String
 
+  subject                String   @default("")
   draftText              String
+  bodyHtml               String?
+  // Free-form extra recipients, set when a human composes a one-off message.
+  ccEmails               String[] @default([])
+  bccEmails              String[] @default([])
   // §1.4: the DB-sourced numbers, injected as typed variables. The model never
   // sees a free-text slot where a number could be invented.
-  templateVariables      Json    @default("{}")
-  containsFinancialTerms Boolean @default(false)
-  requiresApproval       Boolean @default(true)
+  templateVariables      Json     @default("{}")
+  containsFinancialTerms Boolean  @default(false)
+  requiresApproval       Boolean  @default(true)
 
   status           DraftStatus @default(PENDING)
   approvedByUserId String?
   autoSendRuleId   String?
   sentAt           DateTime?
+  // Why the last send attempt failed, and how many have been tried. An APPROVED
+  // draft with a lastSendError is the retry queue — before this existed a failed
+  // send left the row APPROVED and indistinguishable from one awaiting dispatch,
+  // so nothing could ever retry it.
+  lastSendError    String?
+  sendAttempts     Int         @default(0)
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
@@ -448,8 +460,13 @@ model InteractionEvent {
 
   status    InteractionStatus
   // The rendered text actually sent — you must be able to answer
-  // "what exactly did we send this dealer?" (§4).
+  // "what exactly did we send this dealer?" (§4). Subject is part of that answer.
+  subject   String            @default("")
   body      String
+  toAddress String            @default("")
+  // Provider/transport failure text for a FAILED row, so the Sent view can say why
+  // instead of showing a bare red badge.
+  errorText String?
   createdAt DateTime          @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id])
@@ -472,6 +489,12 @@ model SendingIdentity {
   organizationId     String
   domain             String
   provider           String
+  // Who the mail appears to come from: `"<fromName>" <fromLocalPart@domain>`.
+  // Both were hardcoded ("sales@" + no display name) — a real person's name in
+  // the From line measurably outperforms a role address on cold outreach.
+  fromName           String                   @default("")
+  fromLocalPart      String                   @default("sales")
+  replyToAddress     String?
   verificationStatus DomainVerificationStatus @default(UNVERIFIED)
   dkimRecords        Json                     @default("[]")
   warmupStartedAt    DateTime?
@@ -602,7 +625,19 @@ model OutreachTemplate {
   id             String   @id @default(cuid())
   organizationId String
   name           String
+  // The subject line. Was hardcoded to one string for every email the app ever
+  // sent, which is both unusable and the single strongest spam signal a cold
+  // sender can emit. Supports the same {{placeholders}} the body does.
+  subject        String   @default("")
   bodyText       String
+  // Optional HTML alternative. Null = send text only, which is what cold outreach
+  // generally should do anyway (a plain-looking first-touch mail lands better).
+  bodyHtml       String?
+  // false = render this template deterministically and never show it to the model.
+  // §1.4 is satisfied trivially in that mode (the AI writes nothing at all), which
+  // is what lets a human-authored template contain literal digits — "24x7",
+  // "Since 1995", a GST number — that the AI path must still refuse to emit.
+  useAi          Boolean  @default(true)
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -610,4 +645,36 @@ model OutreachTemplate {
   organization Organization @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId])
+}
+
+/**
+ * Per-organization outbound settings (§12.6, §6). One row per org.
+ * `throttleEnabled = false` means "do not impose an application-level cap" — the
+ * only remaining limits are the provider's own, enforced by paced dispatch rather
+ * than a daily ceiling. The warmup ramp is likewise opt-out: it protects a brand
+ * new domain, but an org sending from an already-warm domain should not be held
+ * to 20/day because this app assumed it must be new.
+ */
+model OutreachSettings {
+  id             String @id @default(cuid())
+  organizationId String @unique
+
+  throttleEnabled   Boolean @default(true)
+  warmupEnabled     Boolean @default(true)
+  /**
+   * Applies only while throttleEnabled. 0 = unlimited.
+   */
+  dailyLimit        Int     @default(50)
+  /**
+   * Paced dispatch, always applied — this is the provider's rate limit, not ours.
+   * Resend allows 2 requests/second; 500ms keeps us just inside it.
+   */
+  minSendIntervalMs Int     @default(500)
+
+  emailPaused Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
 }

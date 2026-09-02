@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { TenantAuthGuard } from '../../core/auth';
 import { TemplateService } from './template.service';
+import type { TemplateInput } from './template.service';
 
 @Controller('outreach-email/templates')
 @UseGuards(TenantAuthGuard)
@@ -13,12 +14,12 @@ export class TemplateController {
   }
 
   @Post()
-  create(@Body() body: { name: string; bodyText: string; isActive?: boolean }) {
+  create(@Body() body: TemplateInput) {
     return this.templates.create(body);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: { name?: string; bodyText?: string; isActive?: boolean }) {
+  update(@Param('id') id: string, @Body() body: Partial<TemplateInput>) {
     return this.templates.update(id, body);
   }
 

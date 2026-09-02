@@ -25,9 +25,9 @@ export interface KillSwitch {
 export const SEND_THROTTLE = 'OUTREACH_EMAIL_SEND_THROTTLE';
 export const KILL_SWITCH = 'OUTREACH_EMAIL_KILL_SWITCH';
 
-// ponytail: permissive placeholder — always allows. The real shared throttle service
-// (§3) does not exist yet. Replace via DI once core/throttle lands; do not build a
-// second real throttle here.
+// TEST DOUBLES. These were the module's real bindings for far too long — see
+// throttle.impl.ts, which now provides both ports for real. Keep them for tests that
+// want a send path with no Redis and no limits; never bind them in the module again.
 export class AlwaysAllowThrottle implements SendThrottle {
   async tryConsume(): Promise<SendThrottleDecision> {
     return { allowed: true };

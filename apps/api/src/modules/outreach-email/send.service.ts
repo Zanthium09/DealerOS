@@ -66,6 +66,20 @@ export class EmailSendService {
     if (dealerEmail.verificationStatus === 'INVALID') {
       throw new EmailSendError(`dealer ${dealer.id}'s email is INVALID — never sent to (§6)`);
     }
+    // Checked here, not only at import: a bad address reaching the provider comes
+    // back as an opaque 4xx that used to surface as "Internal server error", and it
+    // burns sender reputation. Imported data is messy — one real dealer's primary
+    // address was the literal string "microdots", a fragment of a free-text cell.
+    if (!isPlausibleEmail(dealerEmail.address)) {
+      await this.prisma.dealerEmail.update({
+        where: { id: dealerEmail.id },
+        data: { verificationStatus: 'INVALID' },
+      });
+      throw new EmailSendError(
+        `"${dealerEmail.address}" is not a valid email address — marked INVALID, not sent. ` +
+          `Fix this dealer's address to reach them.`,
+      );
+    }
 
     // §12.7 — a code-level guard, not documentation. A no-op in production; everywhere
     // else it throws unless this address is a recognised test destination, regardless
@@ -96,21 +110,11 @@ export class EmailSendService {
       throw new EmailSendError('no verified SendingIdentity for this organization — SPF/DKIM/DMARC required (§6)');
     }
 
-    // §6 — warmup ramp / hard cap. Approximated per-organization (v1 assumes one
-    // active identity per org, matching everywhere else in this module); a true
-    // per-identity count needs InteractionEvent to carry a sendingIdentityId, which
-    // does not exist on the schema today (see report — flagged, not added silently).
-    const startOfDay = new Date();
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    const sentToday = await this.prisma.interactionEvent.count({
-      where: { channel: 'EMAIL', direction: 'OUTBOUND', status: 'SENT', createdAt: { gte: startOfDay } },
-    });
-    if (sentToday >= identity.currentDailyLimit) {
-      throw new EmailSendError(
-        `identity ${identity.domain} has hit its daily cap (${identity.currentDailyLimit}) — refusing (§6)`,
-      );
-    }
-
+    // The daily ceiling lives entirely in the throttle now (throttle.impl.ts), which
+    // reads the org's OutreachSettings. It used to be duplicated here as an
+    // unconditional count against `identity.currentDailyLimit` — a second, hidden cap
+    // that no setting could raise, so "throttle disabled" could not actually mean
+    // disabled while it stood.
     const decision = await this.throttle.tryConsume(dealer.organizationId);
     if (!decision.allowed) {
       throw new EmailSendError(`send throttled: ${decision.reason ?? 'no budget right now'}`);
@@ -129,18 +133,30 @@ export class EmailSendService {
       messageDraftId: draft.id,
     };
 
+    // Every email used to carry the identical hardcoded subject "A note about your
+    // business". Thousands of cold sends sharing one subject line is among the
+    // strongest spam signals a new domain can emit, and it was not editable anywhere.
+    const subject = draft.subject?.trim() || DEFAULT_SUBJECT;
+    const fromAddress = `${identity.fromLocalPart || 'sales'}@${identity.domain}`;
+    const from = identity.fromName ? `${quoteDisplayName(identity.fromName)} <${fromAddress}>` : fromAddress;
+
     let providerMessageId: string;
     try {
       const result = await this.email.send({
-        from: `sales@${identity.domain}`,
+        from,
         to: dealerEmail.address,
-        subject: `A note about your business`,
+        cc: draft.ccEmails.filter(isPlausibleEmail),
+        bcc: draft.bccEmails.filter(isPlausibleEmail),
+        replyTo: identity.replyToAddress ?? undefined,
+        subject,
         text: draft.draftText,
+        html: draft.bodyHtml ?? undefined,
         headers,
         tags,
       });
       providerMessageId = result.providerMessageId;
     } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
       await this.prisma.interactionEvent.create({
         data: {
           id: interactionEventId,
@@ -149,8 +165,18 @@ export class EmailSendService {
           direction: 'OUTBOUND',
           messageDraftId: draft.id,
           status: 'FAILED',
+          subject,
+          toAddress: dealerEmail.address,
+          errorText,
           body: draft.draftText,
         } as Prisma.InteractionEventUncheckedCreateInput,
+      });
+      // Leaves the draft APPROVED but now marked with why it failed, which is what
+      // makes it show up in the retry queue instead of vanishing (§9 forbids
+      // re-deciding it, so retry re-sends rather than re-approves).
+      await this.prisma.messageDraft.update({
+        where: { id: draft.id },
+        data: { lastSendError: errorText, sendAttempts: { increment: 1 } },
       });
       throw err;
     }
@@ -164,6 +190,8 @@ export class EmailSendService {
         messageDraftId: draft.id,
         providerMessageId,
         status: 'SENT',
+        subject,
+        toAddress: dealerEmail.address,
         body: draft.draftText,
       } as Prisma.InteractionEventUncheckedCreateInput,
     });
@@ -177,9 +205,51 @@ export class EmailSendService {
       // MessageDraft does not separately record "was the text edited", so a
       // human-approved-unedited send is also stamped EDITED_AND_SENT, the closer of
       // the two available terminal values (a human, not a rule, decided it).
-      data: { status: draft.autoSendRuleId ? 'AUTO_SENT' : 'EDITED_AND_SENT', sentAt: new Date() },
+      data: {
+        status: draft.autoSendRuleId ? 'AUTO_SENT' : 'EDITED_AND_SENT',
+        sentAt: new Date(),
+        lastSendError: null,
+        sendAttempts: { increment: 1 },
+      },
     });
 
     return event;
   }
+
+  /**
+   * Re-attempt a draft whose send failed. §9's approval guard rejects deciding a
+   * draft twice, and rightly so — but that also meant a send that failed for a
+   * transient reason (provider 429, a paused channel, a since-corrected address)
+   * could never be retried at all, because the draft was already APPROVED. Retry
+   * skips the decision entirely and repeats only the dispatch.
+   */
+  async retryFailedDraft(draftId: string): Promise<InteractionEvent> {
+    const draft = await this.prisma.messageDraft.findFirst({ where: { id: draftId } });
+    if (!draft) throw new EmailSendError(`no draft ${draftId} in this organization`);
+    if (draft.status !== 'APPROVED') {
+      throw new EmailSendError(
+        `draft ${draftId} is ${draft.status} — only an APPROVED draft whose send failed can be retried`,
+      );
+    }
+    return this.sendApprovedDraft(draftId);
+  }
+}
+
+/** Used when a draft carries no subject of its own (older rows, and the seeded
+ *  default template before an org writes its own). */
+export const DEFAULT_SUBJECT = 'Partnership enquiry';
+
+/**
+ * Deliberately permissive: one @, a dot-bearing domain, no spaces. Not RFC 5322 —
+ * that grammar accepts things no real mail server does and rejecting a deliverable
+ * address is worse than passing a doubtful one to the provider. This exists to
+ * catch the genuinely-not-an-address values that messy imports produce.
+ */
+export function isPlausibleEmail(address: string): boolean {
+  return /^[^\s@,;<>]+@[^\s@,;<>]+\.[A-Za-z]{2,}$/.test(address.trim());
+}
+
+/** RFC 5322 display names need quoting once they contain a comma, dot or quote. */
+function quoteDisplayName(name: string): string {
+  return `"${name.replace(/["\\]/g, '')}"`;
 }

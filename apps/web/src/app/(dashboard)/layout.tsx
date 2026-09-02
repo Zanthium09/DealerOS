@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   Building2,
+  PenLine,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -35,6 +36,7 @@ import { Button } from '@/components/ui/button';
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dealers', label: 'Dealers', icon: Users },
+  { href: '/compose', label: 'Compose', icon: PenLine },
   { href: '/queue', label: 'Approval Queue', icon: ClipboardCheck },
   { href: '/sent', label: 'Sent', icon: Send },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },

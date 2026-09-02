@@ -20,6 +20,13 @@ export type ColdOutreachOptions = {
    *  from this batch before it goes out" — the queue is the same one §9 already has,
    *  this just routes every draft there instead of some of them. */
   forceReview?: boolean;
+  /** Draft with a specific saved template instead of the active one. */
+  templateId?: string;
+  /** By default a dealer who already has an outreach draft is skipped forever, which
+   *  made a second campaign to an existing audience impossible. Set this to draft
+   *  them again — consent and suppression still apply, this only lifts the
+   *  "already contacted once" guard. */
+  allowResend?: boolean;
 };
 
 /**
@@ -52,9 +59,21 @@ export class OutreachEmailService {
 
     for (const dealer of dealers) {
       if (options.maxDealers !== undefined && result.drafted >= options.maxDealers) break;
-      if (await alreadyDrafted(this.prisma, dealer.id)) continue;
+      if (!options.allowResend && (await alreadyDrafted(this.prisma, dealer.id))) continue;
 
-      let draft = await this.coldDraft.draft(dealer, org.name);
+      // Per-dealer, not per-run: a single dealer whose draft fails (an AI hiccup, an
+      // odd business name) used to abort the whole batch and lose every dealer after
+      // it. One bad row is a skip, not a failed run.
+      let draft;
+      try {
+        draft = await this.coldDraft.draft(dealer, org.name, options.templateId);
+      } catch (err) {
+        result.skipped.push({
+          dealerId: dealer.id,
+          reason: `draft failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        continue;
+      }
       result.drafted++;
 
       if (options.forceReview && !draft.requiresApproval) {

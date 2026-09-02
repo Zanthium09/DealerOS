@@ -10,6 +10,9 @@ import type { ColdOutreachOptions } from './outreach-email.service';
 import { EmailSendService, SOURCE_MODULE } from './send.service';
 import { SequenceService } from './sequence.service';
 import { CustomDraftService } from './custom-draft.service';
+import { OutreachSettingsService } from './settings.service';
+import type { OutreachSettingsInput } from './settings.service';
+import { EmailSendThrottle } from './throttle.impl';
 import type { OutreachSegmentFilter } from './eligibility';
 
 /**
@@ -34,6 +37,8 @@ export class OutreachEmailDashboardController {
     private readonly send: EmailSendService,
     private readonly sequence: SequenceService,
     private readonly customDraft_: CustomDraftService,
+    private readonly settingsService: OutreachSettingsService,
+    private readonly throttleImpl: EmailSendThrottle,
   ) {}
 
   /**
@@ -49,12 +54,21 @@ export class OutreachEmailDashboardController {
   @Post('run')
   run(
     @CurrentTenantSession() session: TenantSession,
-    @Body() body: { maxDealers?: number; segmentFilter?: OutreachSegmentFilter; forceReview?: boolean } = {},
+    @Body()
+    body: {
+      maxDealers?: number;
+      segmentFilter?: OutreachSegmentFilter;
+      forceReview?: boolean;
+      allowResend?: boolean;
+      templateId?: string;
+    } = {},
   ) {
     const options: ColdOutreachOptions = {
       maxDealers: typeof body.maxDealers === 'number' && body.maxDealers > 0 ? body.maxDealers : undefined,
       segmentFilter: body.segmentFilter,
       forceReview: body.forceReview === true,
+      allowResend: body.allowResend === true,
+      templateId: typeof body.templateId === 'string' ? body.templateId : undefined,
     };
     return this.outreach.runColdOutreach(session.organizationId, options);
   }
@@ -118,6 +132,58 @@ export class OutreachEmailDashboardController {
     });
   }
 
+  /** Outbound controls: throttle on/off, daily limit, pacing, channel pause (§12.6). */
+  @Get('settings')
+  async settings(@CurrentTenantSession() session: TenantSession) {
+    const settings = await this.settingsService.get(session.organizationId);
+    return {
+      ...settings,
+      usedToday: await this.throttleImpl.usedToday(session.organizationId),
+      effectiveDailyLimit: finiteOrNull(await this.throttleImpl.limitFor(session.organizationId)),
+    };
+  }
+
+  @Patch('settings')
+  updateSettings(@Body() body: OutreachSettingsInput) {
+    return this.settingsService.update(body ?? {});
+  }
+
+  /**
+   * Compose to one specific company, with full control over the fields — the
+   * "search a company and email them" path. Nothing here is model-written, so
+   * there is no §1.4 surface: what the user types is what is rendered, with
+   * {{placeholders}} filled from that dealer's own database columns.
+   */
+  @Post('compose')
+  async compose(
+    @Body()
+    body: {
+      dealerId?: unknown;
+      subject?: unknown;
+      bodyText?: unknown;
+      bodyHtml?: unknown;
+      cc?: unknown;
+      bcc?: unknown;
+      sendNow?: unknown;
+    },
+  ) {
+    if (typeof body?.dealerId !== 'string' || !body.dealerId) throw new BadRequestException('dealerId is required');
+    if (typeof body?.bodyText !== 'string' || !body.bodyText.trim()) throw new BadRequestException('bodyText is required');
+    if (typeof body?.subject !== 'string' || !body.subject.trim()) throw new BadRequestException('subject is required');
+
+    const draft = await this.customDraft_.compose({
+      dealerId: body.dealerId,
+      subject: body.subject,
+      bodyText: body.bodyText,
+      bodyHtml: typeof body.bodyHtml === 'string' ? body.bodyHtml : null,
+      cc: toAddressList(body.cc),
+      bcc: toAddressList(body.bcc),
+    });
+
+    if (body.sendNow !== true) return { draftId: draft.id, sent: false };
+    return this.decideAndSend(draft.id, () => this.approval.autoSend(draft.id));
+  }
+
   @Get('sending-identities')
   identities() {
     return this.prisma.sendingIdentity.findMany({ orderBy: { createdAt: 'desc' } });
@@ -160,29 +226,97 @@ export class OutreachEmailDashboardController {
    * the reason the ramp exists.
    */
   @Patch('sending-identities/:id')
-  updateIdentity(@Param('id') id: string, @Body() body: { currentDailyLimit?: unknown }) {
-    if (typeof body?.currentDailyLimit !== 'number' || body.currentDailyLimit < 1) {
+  updateIdentity(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      currentDailyLimit?: unknown;
+      fromName?: unknown;
+      fromLocalPart?: unknown;
+      replyToAddress?: unknown;
+    },
+  ) {
+    if (body?.currentDailyLimit !== undefined && (typeof body.currentDailyLimit !== 'number' || body.currentDailyLimit < 1)) {
       throw new BadRequestException('currentDailyLimit must be a positive number');
+    }
+    // The From line was `sales@<domain>` with no display name, on every message.
+    if (body?.fromLocalPart !== undefined && !/^[A-Za-z0-9._-]+$/.test(String(body.fromLocalPart))) {
+      throw new BadRequestException('fromLocalPart may only contain letters, digits, dot, underscore or hyphen');
     }
     return this.prisma.sendingIdentity.update({
       where: { id },
-      data: { currentDailyLimit: Math.floor(body.currentDailyLimit) },
+      data: {
+        ...(body.currentDailyLimit !== undefined
+          ? { currentDailyLimit: Math.floor(body.currentDailyLimit as number) }
+          : {}),
+        ...(body.fromName !== undefined ? { fromName: String(body.fromName).trim() } : {}),
+        ...(body.fromLocalPart !== undefined ? { fromLocalPart: String(body.fromLocalPart).trim() } : {}),
+        ...(body.replyToAddress !== undefined
+          ? { replyToAddress: body.replyToAddress ? String(body.replyToAddress).trim() : null }
+          : {}),
+      },
+    });
+  }
+
+  /**
+   * Re-dispatch a draft that was approved but whose send failed. Not a second
+   * decision (§9 forbids that and would throw) — the approval stands, only the
+   * delivery is retried.
+   */
+  @Post('drafts/:id/retry')
+  async retry(@Param('id') id: string) {
+    const event = await this.send.retryFailedDraft(id);
+    await this.sequence.start(event.organizationId, event.dealerId, event.id);
+    return { sent: true, interactionEventId: event.id };
+  }
+
+  /** Every approved draft whose last send attempt failed — the retry queue. */
+  @Get('failed')
+  failed() {
+    return this.prisma.messageDraft.findMany({
+      where: { sourceModule: SOURCE_MODULE, status: 'APPROVED', lastSendError: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+      include: { dealer: { select: { businessName: true, emails: { where: { isPrimary: true }, take: 1 } } } },
     });
   }
 
   private async decideAndSend(draftId: string, decide: () => Promise<{ id: string }>) {
+    // `decide()` used to sit OUTSIDE this try. An ApprovalError from it (the common
+    // "this draft was already decided" case, e.g. a double-click) is a plain Error,
+    // so it escaped the controller and Nest turned it into a bare 500 "Internal
+    // server error" — the exact failure reported from the queue screen. It is now
+    // inside, and the global filter maps it to 409 with its real message either way.
     const draft = await decide();
     try {
       const event = await this.send.sendApprovedDraft(draft.id);
       await this.sequence.start(event.organizationId, event.dealerId, event.id);
       return { sent: true, interactionEventId: event.id };
     } catch (err) {
-      // The decision already happened and is audited — a send failure (e.g. daily
-      // cap, kill switch) does not get silently swallowed, but it also does not
-      // undo the approval: the draft is APPROVED and will need a manual resend path
-      // once one exists, same as any approved-but-unsent draft would.
+      // The decision already happened and is audited — a send failure (daily cap,
+      // kill switch, bad address) does not undo the approval. The draft stays
+      // APPROVED with lastSendError set, which is what puts it in the retry queue
+      // above rather than losing it.
       if (err instanceof ApprovalError) throw err;
-      throw new BadRequestException(err instanceof Error ? err.message : String(err));
+      throw new BadRequestException(
+        `${err instanceof Error ? err.message : String(err)} — the draft stays approved and can be retried.`,
+      );
     }
   }
+}
+
+/** Accepts "a@b.com, c@d.com" or a JSON array; drops anything that is not an address. */
+function toAddressList(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value.map(String)
+    : typeof value === 'string'
+      ? value.split(/[,;\s]+/)
+      : [];
+  return raw.map((v) => v.trim()).filter((v) => v !== '');
+}
+
+/** Infinity is not valid JSON — it serialises to null, which would silently read as
+ *  "no limit configured" in the UI. Say null explicitly and mean it. */
+function finiteOrNull(n: number): number | null {
+  return Number.isFinite(n) ? n : null;
 }

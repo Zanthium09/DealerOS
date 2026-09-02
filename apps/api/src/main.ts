@@ -58,6 +58,11 @@ async function bootstrap() {
   // useBodyParser, so §8 webhook signature verification is unaffected.
   app.useBodyParser('json', { limit: '25mb' });
   app.useBodyParser('urlencoded', { limit: '25mb', extended: true });
+  // Without this every domain error (a draft already decided, a dealer with no
+  // address, a paused channel) surfaced as a bare 500 "Internal server error" with
+  // the reason discarded. See the filter's own comment.
+  const { DomainExceptionFilter } = await import('./core/errors/domain-exception.filter');
+  app.useGlobalFilters(new DomainExceptionFilter());
   // Dashboard (apps/web) runs on a different port in dev; the session cookie is
   // HttpOnly (§9A.1) so the browser must send it itself via `credentials: 'include'`,
   // which requires CORS to name the origin explicitly and allow credentials.

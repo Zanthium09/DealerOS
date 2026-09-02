@@ -36,14 +36,24 @@ export class ResendProvider implements EmailProvider {
       body: JSON.stringify({
         from: params.from,
         to: [params.to],
+        ...(params.cc?.length ? { cc: params.cc } : {}),
+        ...(params.bcc?.length ? { bcc: params.bcc } : {}),
+        ...(params.replyTo ? { reply_to: params.replyTo } : {}),
         subject: params.subject,
         text: params.text,
+        ...(params.html ? { html: params.html } : {}),
         headers: params.headers,
-        tags: Object.entries(params.tags).map(([name, value]) => ({ name, value })),
+        // Resend rejects tag values outside [A-Za-z0-9_-], and a rejected tag fails
+        // the whole send. Ids here are cuid/uuid so they pass, but a stray value
+        // would otherwise turn a good message into a hard error at the provider.
+        tags: Object.entries(params.tags)
+          .filter(([, value]) => value)
+          .map(([name, value]) => ({ name, value: value.replace(/[^A-Za-z0-9_-]/g, '_') })),
       }),
     });
     if (!res.ok) {
-      throw new EmailProviderError(`Resend send failed: ${res.status} ${await res.text()}`);
+      const detail = await res.text().catch(() => '');
+      throw new EmailProviderError(`Resend send failed (${res.status}): ${extractResendMessage(detail)}`);
     }
     const body = (await res.json()) as { id: string };
     return { providerMessageId: body.id };
@@ -181,6 +191,18 @@ export function htmlToPlainText(html: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .trim();
+}
+
+/** Resend returns `{"statusCode":422,"message":"...","name":"validation_error"}`.
+ *  Surfacing that message is the difference between "Internal server error" and
+ *  "the recipient address is not valid" in the dashboard. */
+function extractResendMessage(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { message?: string; name?: string };
+    return parsed.message ?? parsed.name ?? body;
+  } catch {
+    return body || 'no response body';
+  }
 }
 
 function mapStatus(s: string): DomainVerification['status'] {
