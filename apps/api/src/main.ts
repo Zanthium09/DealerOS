@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { signTenantSession } from './core/auth/tenant-session';
 import { signPlatformSession } from './core/platform-admin/platform-session';
 import { newSecret } from './core/platform-admin/totp';
@@ -50,7 +51,13 @@ async function bootstrap() {
   // rawBody: true — §8 webhook signature verification must run over the exact bytes
   // received, before JSON parsing. Nest captures them onto req.rawBody alongside the
   // normal parsed req.body; nothing else in the app reads rawBody.
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  // §5.1 — dealer list uploads arrive as base64 inside the JSON body (contacts
+  // controller), which blows past Express's 100kb default long before a real
+  // distributor's CSV/XLSX would. rawBody capture (above) still applies under
+  // useBodyParser, so §8 webhook signature verification is unaffected.
+  app.useBodyParser('json', { limit: '25mb' });
+  app.useBodyParser('urlencoded', { limit: '25mb', extended: true });
   // Dashboard (apps/web) runs on a different port in dev; the session cookie is
   // HttpOnly (§9A.1) so the browser must send it itself via `credentials: 'include'`,
   // which requires CORS to name the origin explicitly and allow credentials.
