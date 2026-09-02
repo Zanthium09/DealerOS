@@ -113,7 +113,19 @@ export function normalizeRow(row: Row, mapping: ColumnMapping): NormalizedRow {
     .map((v) => v.trim())
     .filter((v) => v !== '')
     .map(normalizePhone);
-  const emails = [...new Set(pick(row, mapping.email).flatMap((v) => v.split(/[,;\s]+/)).filter(Boolean).map(normalizeEmail))];
+  const emails = [
+    ...new Set(
+      pick(row, mapping.email)
+        .flatMap((v) => v.split(/[,;\s]+/))
+        .map((v) => v.replace(/^[<"']+|[>"']+$/g, ''))
+        // A free-text cell ("Microdots Consultancy <info@x.com>") splits into
+        // several non-email tokens alongside the real one — only a token with
+        // an "@" was ever an email to begin with; the rest is not data to keep,
+        // it never was an address (§1.4's "absent is null, never a guess" spirit).
+        .filter((v) => v.includes('@'))
+        .map(normalizeEmail),
+    ),
+  ];
 
   const base = {
     businessName: (one(row, mapping.businessName) ?? '').trim(),

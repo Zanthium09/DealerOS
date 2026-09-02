@@ -32,9 +32,8 @@ type Interaction = {
   body: string;
   createdAt: string;
   providerMessageId: string | null;
+  dealer: { businessName: string } | null;
 };
-
-type Dealer = { id: string; businessName: string };
 
 const STATUS_VARIANT: Record<string, 'secondary' | 'default' | 'destructive' | 'outline'> = {
   SENT: 'secondary',
@@ -64,7 +63,6 @@ const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var
 
 export default function SentPage() {
   const [interactions, setInteractions] = useState<Interaction[] | null>(null);
-  const [dealerNames, setDealerNames] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [openItem, setOpenItem] = useState<Interaction | null>(null);
   const [rangeDays, setRangeDays] = useState('30');
@@ -73,9 +71,6 @@ export default function SentPage() {
     apiFetch<Interaction[]>('/outreach-email/interactions')
       .then(setInteractions)
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load history'));
-    apiFetch<Dealer[]>('/contacts')
-      .then((dealers) => setDealerNames(Object.fromEntries(dealers.map((d) => [d.id, d.businessName]))))
-      .catch(() => {});
   }, []);
 
   const filtered = useMemo(() => {
@@ -192,7 +187,7 @@ export default function SentPage() {
             ) : (
               filtered.map((i) => (
                 <TableRow key={i.id} className="cursor-pointer" onClick={() => setOpenItem(i)}>
-                  <TableCell className="font-medium">{dealerNames[i.dealerId] ?? i.dealerId}</TableCell>
+                  <TableCell className="font-medium">{i.dealer?.businessName ?? i.dealerId}</TableCell>
                   <TableCell>
                     <Badge variant={STATUS_VARIANT[i.status] ?? 'outline'} className={STATUS_CLASS[i.status]}>
                       {i.status}
@@ -209,7 +204,7 @@ export default function SentPage() {
       <Dialog open={!!openItem} onOpenChange={(open) => !open && setOpenItem(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{openItem ? dealerNames[openItem.dealerId] ?? openItem.dealerId : ''}</DialogTitle>
+            <DialogTitle>{openItem ? (openItem.dealer?.businessName ?? openItem.dealerId) : ''}</DialogTitle>
             <DialogDescription>
               {openItem && `Exactly what was ${openItem.direction === 'OUTBOUND' ? 'sent' : 'received'} — ${new Date(openItem.createdAt).toLocaleString()}`}
             </DialogDescription>

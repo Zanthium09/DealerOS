@@ -103,13 +103,18 @@ export class OutreachEmailDashboardController {
     return this.approval.reject(id, session.userId, typeof body?.reason === 'string' ? body.reason : undefined);
   }
 
-  /** Send history for one dealer, newest first — "what exactly did we send them" (§4). */
+  /** Send history for one dealer, newest first — "what exactly did we send them" (§4).
+   *  Includes the dealer's name directly — the org can have thousands of dealers, far
+   *  more than a client could reasonably fetch to build its own id->name lookup, and
+   *  that lookup being merely capped (not wrong) is exactly the kind of gap that looks
+   *  fine in a demo and shows raw ids in production. */
   @Get('interactions')
   interactions(@Query('dealerId') dealerId?: string) {
     return this.prisma.interactionEvent.findMany({
       where: { channel: 'EMAIL', ...(dealerId ? { dealerId } : {}) },
       orderBy: { createdAt: 'desc' },
       take: 200,
+      include: { dealer: { select: { businessName: true } } },
     });
   }
 
