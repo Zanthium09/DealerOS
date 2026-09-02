@@ -9,6 +9,7 @@ export {
   percent,
   date,
   text,
+  name,
   render,
   renderVariable,
   containsFinancialTerms,

@@ -1,15 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Dealer, MessageDraft, PrismaClient } from '@prisma/client';
 import { PRISMA } from '../../core/tenancy/tenancy.module';
-import { DraftingService, template, text } from '../../core/drafting';
+import { DraftingService, template, name } from '../../core/drafting';
 import { SOURCE_MODULE } from './send.service';
 
 /**
  * §5.2 — cold outreach draft. No financial terms by construction: the only variables
- * are names, both `text()` (§1.4's prose slot, which refuses digits itself). This is
- * a skeleton the model rewrites for tone (drafting.service.ts's SYSTEM prompt), not
- * an instruction — an instruction here would be echoed verbatim by a model that
- * doesn't distinguish "rewrite this" from "here is what to write".
+ * are names pulled straight from the database, so they use `name()` — not `text()`,
+ * which is for model-adjacent prose and rejects digits real business names often
+ * contain (e.g. "24x7 Traders"). This is a skeleton the model rewrites for tone
+ * (drafting.service.ts's SYSTEM prompt), not an instruction — an instruction here
+ * would be echoed verbatim by a model that doesn't distinguish "rewrite this" from
+ * "here is what to write".
  *
  * This is the DEFAULT — used whenever an org has not saved its own wording via
  * OutreachTemplate (template.service.ts). An empty template table is a valid,
@@ -43,9 +45,9 @@ export class ColdDraftService {
       sourceModule: SOURCE_MODULE,
       template: skeleton,
       variables: {
-        businessName: text(dealer.businessName),
-        contactName: text(dealer.contactPersonName ?? 'Sir/Madam'),
-        ourBusinessName: text(ourBusinessName),
+        businessName: name(dealer.businessName),
+        contactName: name(dealer.contactPersonName ?? 'Sir/Madam'),
+        ourBusinessName: name(ourBusinessName),
       },
     });
   }

@@ -70,7 +70,8 @@ export type DraftVariable =
   | { kind: 'quantity'; value: number; unit: string | null }
   | { kind: 'percent'; value: number }
   | { kind: 'date'; iso: string }
-  | { kind: 'text'; value: string };
+  | { kind: 'text'; value: string }
+  | { kind: 'name'; value: string };
 
 export type DraftVariables = Record<string, DraftVariable>;
 
@@ -116,6 +117,22 @@ export function text(value: string): DraftVariable {
   return { kind: 'text', value };
 }
 
+/**
+ * A verbatim database string — a dealer's business name, a contact's name, the
+ * org's own name. §1.4's digit ban exists to stop the *model* from writing a
+ * number; a name pulled straight from a DB column was never written by the model
+ * at all, so there is nothing to distrust. Real business names routinely contain
+ * digits ("24x7 Traders", "S S Enterprises No.2") and `text()` rejecting those
+ * crashed cold outreach for any such dealer.
+ *
+ * Never pass a model's own output through `name()` to dodge the digit check —
+ * it exists precisely so that path stays closed. This is for columns, not
+ * completions.
+ */
+export function name(value: string): DraftVariable {
+  return { kind: 'name', value };
+}
+
 // --------------------------------------------------------------------------
 // Rendering — deterministic, in code, never by the model
 // --------------------------------------------------------------------------
@@ -153,6 +170,7 @@ export function renderVariable(v: DraftVariable): string {
       return `${day} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
     }
     case 'text':
+    case 'name':
       return v.value;
   }
 }

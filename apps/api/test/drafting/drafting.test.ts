@@ -15,6 +15,7 @@ import {
   DraftingError,
   date,
   money,
+  name,
   percent,
   quantity,
   render,
@@ -94,6 +95,15 @@ describe('§1.4 — a number cannot be expressed as free text', () => {
     assert.throws(() => money(1234.5), DraftingError);
     assert.throws(() => money(Number.NaN), DraftingError);
   });
+
+  // FINDING — a real dealer's business name routinely contains a digit
+  // ("24x7 Traders"), and that digit was never written by the model — it came
+  // straight off the DB row. text() rejecting it crashed cold outreach for any
+  // such dealer. name() is for exactly this: verbatim DB strings, digits allowed.
+  test('name() accepts a digit — it is a DB column, not model prose', () => {
+    assert.deepEqual(name('24x7 Traders'), { kind: 'name', value: '24x7 Traders' });
+    assert.deepEqual(name('S S Enterprises No.2'), { kind: 'name', value: 'S S Enterprises No.2' });
+  });
 });
 
 describe('rendering is deterministic and in code', () => {
@@ -150,6 +160,21 @@ describe('DraftingService.draft', () => {
       kind: 'money',
       amountPaise: 4_57_320_00,
     });
+  });
+
+  test('a business name with a digit in it drafts fine via name() (§1.4 — the digit is a DB value, not model prose)', async () => {
+    const draft = await runWithOrg(ORG, () =>
+      withModel('Hello {{contactName}}, greetings from {{businessName}}.').draft({
+        dealerId: DEALER,
+        sourceModule: 'outreach-email',
+        template: template('Hello {{contactName}}, greetings from {{businessName}}.'),
+        variables: {
+          businessName: name('24x7 Traders'),
+          contactName: name('Sir/Madam'),
+        },
+      }),
+    );
+    assert.equal(draft.draftText, 'Hello Sir/Madam, greetings from 24x7 Traders.');
   });
 
   test('the model is never shown a value — only the skeleton', async () => {
