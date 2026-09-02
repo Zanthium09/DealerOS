@@ -13,6 +13,7 @@ import { IndianRupee, Inbox, Loader2 } from 'lucide-react';
 
 type Draft = {
   id: string;
+  subject: string;
   draftText: string;
   containsFinancialTerms: boolean;
   requiresApproval: boolean;
@@ -28,6 +29,7 @@ export default function QueuePage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [editSubject, setEditSubject] = useState('');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -104,7 +106,7 @@ export default function QueuePage() {
     try {
       await apiFetch(`/outreach-email/drafts/${draftId}/edit-approve`, {
         method: 'POST',
-        body: JSON.stringify({ draftText: editText }),
+        body: JSON.stringify({ draftText: editText, subject: editSubject }),
       });
       removeDraft(draftId);
       setEditingId(null);
@@ -260,14 +262,27 @@ export default function QueuePage() {
                             </Badge>
                           )}
                           {editingId === d.id ? (
-                            <Textarea
-                              rows={6}
-                              value={editText}
-                              onChange={(e) => setEditText(e.target.value)}
-                              className="text-sm"
-                            />
+                            <div className="space-y-2">
+                              <Input
+                                value={editSubject}
+                                onChange={(e) => setEditSubject(e.target.value)}
+                                placeholder="Subject line"
+                                className="text-sm font-medium"
+                              />
+                              <Textarea
+                                rows={6}
+                                value={editText}
+                                onChange={(e) => setEditText(e.target.value)}
+                                className="text-sm"
+                              />
+                            </div>
                           ) : (
-                            <p className="whitespace-pre-wrap text-sm text-foreground">{d.draftText}</p>
+                            <>
+                              <p className="text-sm font-medium text-foreground">
+                                {d.subject || <span className="italic text-muted-foreground">no subject</span>}
+                              </p>
+                              <p className="whitespace-pre-wrap text-sm text-foreground">{d.draftText}</p>
+                            </>
                           )}
 
                           <div className="flex flex-wrap gap-2 pt-1">
@@ -292,6 +307,7 @@ export default function QueuePage() {
                                   onClick={() => {
                                     setEditingId(d.id);
                                     setEditText(d.draftText);
+                                    setEditSubject(d.subject ?? '');
                                   }}
                                 >
                                   Edit & Approve

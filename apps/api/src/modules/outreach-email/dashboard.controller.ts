@@ -102,9 +102,21 @@ export class OutreachEmailDashboardController {
   async editApproveAndSend(
     @CurrentTenantSession() session: TenantSession,
     @Param('id') id: string,
-    @Body() body: { draftText?: unknown },
+    @Body() body: { draftText?: unknown; subject?: unknown; cc?: unknown; bcc?: unknown },
   ) {
     if (typeof body?.draftText !== 'string') throw new BadRequestException('draftText is required');
+    // The subject was not editable anywhere, so a reviewer could fix the wording of
+    // a message but not the line that decides whether it is opened at all.
+    if (body.subject !== undefined || body.cc !== undefined || body.bcc !== undefined) {
+      await this.prisma.messageDraft.updateMany({
+        where: { id, status: 'PENDING' },
+        data: {
+          ...(typeof body.subject === 'string' ? { subject: body.subject.trim() } : {}),
+          ...(body.cc !== undefined ? { ccEmails: toAddressList(body.cc) } : {}),
+          ...(body.bcc !== undefined ? { bccEmails: toAddressList(body.bcc) } : {}),
+        },
+      });
+    }
     return this.decideAndSend(id, () => this.approval.editAndApprove(id, session.userId, body.draftText as string));
   }
 
