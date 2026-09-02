@@ -337,11 +337,18 @@ export class OutreachEmailDashboardController {
     return { sent: true, interactionEventId: event.id };
   }
 
-  /** Every approved draft whose last send attempt failed — the retry queue. */
+  /**
+   * The retry queue: approved drafts that never actually went out.
+   *
+   * APPROVED is itself the signal — a successful send flips the draft to
+   * AUTO_SENT/EDITED_AND_SENT, so anything still sitting at APPROVED is by
+   * definition a dispatch that did not complete. Keying off `lastSendError`
+   * instead would miss every failure that predates that column.
+   */
   @Get('failed')
   failed() {
     return this.prisma.messageDraft.findMany({
-      where: { sourceModule: SOURCE_MODULE, status: 'APPROVED', lastSendError: { not: null } },
+      where: { sourceModule: SOURCE_MODULE, status: 'APPROVED' },
       orderBy: { updatedAt: 'desc' },
       take: 200,
       include: { dealer: { select: { businessName: true, emails: { where: { isPrimary: true }, take: 1 } } } },

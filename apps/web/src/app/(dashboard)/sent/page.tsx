@@ -211,7 +211,8 @@ export default function SentPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{f.dealer?.businessName ?? 'Unknown company'}</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {f.dealer?.emails?.[0]?.address ?? 'no address'} · {f.lastSendError}
+                    {f.dealer?.emails?.[0]?.address ?? 'no address'}
+                    {f.lastSendError ? ` · ${f.lastSendError}` : ' · approved but never sent'}
                   </p>
                 </div>
                 <Button size="sm" variant="outline" disabled={retrying === f.id} onClick={() => retry(f.id)}>
@@ -315,7 +316,7 @@ export default function SentPage() {
               {openItem && `Exactly what was ${openItem.direction === 'OUTBOUND' ? 'sent' : 'received'} — ${new Date(openItem.createdAt).toLocaleString()}`}
             </DialogDescription>
           </DialogHeader>
-          {openItem && (
+          {openItem && (openItem.toAddress || openItem.subject) && (
             <div className="space-y-1 rounded-lg bg-muted/50 p-3 text-sm">
               {openItem.toAddress && (
                 <p>
