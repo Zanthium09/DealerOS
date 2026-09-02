@@ -1,7 +1,6 @@
-// One place the API base URL and fetch plumbing live — every page calls apiFetch
-// instead of hand-rolling fetch(`http://localhost:3001/...`).
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
-
+// Every page calls apiFetch instead of hand-rolling fetch(). Calls go through
+// next.config.ts's /api/* rewrite to the real API server-side, so the browser
+// only ever talks to its own origin — see next.config.ts for why.
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -12,7 +11,7 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`/api${path}`, {
     ...init,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
