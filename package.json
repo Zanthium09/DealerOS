@@ -8,6 +8,7 @@
     "prisma:migrate": "node --env-file=.env apps/api/scripts/migrate.mjs migrate dev",
     "prisma:deploy": "node --env-file-if-exists=.env apps/api/scripts/migrate.mjs migrate deploy",
     "ensure-app-role": "node --env-file-if-exists=.env apps/api/scripts/ensure-app-role.mjs",
+    "bootstrap-production-org": "node --env-file-if-exists=.env apps/api/scripts/bootstrap-production-org.mjs",
     "test": "pnpm --filter @dealeros/api test",
     "db:seed": "pnpm --filter @dealeros/api db:seed"
   },
