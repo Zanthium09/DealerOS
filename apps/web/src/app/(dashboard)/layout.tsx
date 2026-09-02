@@ -13,6 +13,7 @@ import {
   LogOut,
   Building2,
   PenLine,
+  Megaphone,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -37,6 +38,7 @@ const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dealers', label: 'Dealers', icon: Users },
   { href: '/compose', label: 'Compose', icon: PenLine },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
   { href: '/queue', label: 'Approval Queue', icon: ClipboardCheck },
   { href: '/sent', label: 'Sent', icon: Send },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },

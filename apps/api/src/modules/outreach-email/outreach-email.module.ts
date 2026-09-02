@@ -10,6 +10,8 @@ import { OutreachEmailController } from './outreach-email.controller';
 import { OutreachEmailDashboardController } from './dashboard.controller';
 import { ScheduleController } from './schedule.controller';
 import { TemplateController } from './template.controller';
+import { CampaignController } from './campaign.controller';
+import { CampaignService } from './campaign.service';
 import { TemplateService } from './template.service';
 import { CustomDraftService } from './custom-draft.service';
 import { SuppressionController } from './suppression.controller';
@@ -45,6 +47,7 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
     OutreachEmailDashboardController,
     ScheduleController,
     TemplateController,
+    CampaignController,
     SuppressionController,
   ],
   providers: [
@@ -60,6 +63,7 @@ import { SCHEDULE_QUEUE, SCHEDULE_QUEUE_NAME } from './schedule.tokens';
     UnsubscribeEndpointService,
     ScheduleService,
     OutreachSettingsService,
+    CampaignService,
     EmailSendThrottle,
     EmailKillSwitch,
     // The real implementations. These two ports were still bound to
