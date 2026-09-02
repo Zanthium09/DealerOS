@@ -131,6 +131,115 @@ export class ContactsController {
       .then((total) => ({ total }));
   }
 
+  /**
+   * How much of the imported list is actually mailable.
+   *
+   * Imports split multi-value cells on whitespace with no format check, so a
+   * free-text cell ("Microdots Consultancy <info@x.com>") became several rows,
+   * the first of which — usually not an address at all — was marked primary. Every
+   * such dealer is a guaranteed send failure and a reputation hit, so this counts
+   * them before they are mailed rather than discovering it one bounce at a time.
+   */
+  @Get('email-health')
+  async emailHealth() {
+    const emails = await this.prisma.dealerEmail.findMany({
+      select: { id: true, dealerId: true, address: true, isPrimary: true },
+    });
+
+    const byDealer = new Map<string, typeof emails>();
+    for (const e of emails) {
+      const list = byDealer.get(e.dealerId) ?? [];
+      list.push(e);
+      byDealer.set(e.dealerId, list);
+    }
+
+    let brokenPrimary = 0;
+    let repairable = 0;
+    let unreachable = 0;
+    const junkRows = emails.filter((e) => !isPlausibleEmail(e.address)).length;
+    const samples: { dealerId: string; primary: string; suggestion: string | null }[] = [];
+
+    for (const [dealerId, list] of byDealer) {
+      const primary = list.find((e) => e.isPrimary) ?? list[0];
+      if (!primary || isPlausibleEmail(primary.address)) continue;
+      brokenPrimary++;
+      const better = list.find((e) => isPlausibleEmail(e.address));
+      if (better) repairable++;
+      else unreachable++;
+      if (samples.length < 20) {
+        samples.push({ dealerId, primary: primary.address, suggestion: better?.address ?? null });
+      }
+    }
+
+    return {
+      dealersWithEmail: byDealer.size,
+      brokenPrimary,
+      repairable,
+      unreachable,
+      junkRows,
+      samples,
+    };
+  }
+
+  /**
+   * Promotes a valid address to primary wherever one exists behind a broken one,
+   * and deletes the fragments that were never addresses. Idempotent — running it
+   * twice changes nothing the second time.
+   */
+  @Post('email-health/repair')
+  async repairEmails(@Body() body: { deleteJunk?: unknown } = {}) {
+    const emails = await this.prisma.dealerEmail.findMany({
+      select: { id: true, dealerId: true, address: true, isPrimary: true },
+    });
+    const byDealer = new Map<string, typeof emails>();
+    for (const e of emails) {
+      const list = byDealer.get(e.dealerId) ?? [];
+      list.push(e);
+      byDealer.set(e.dealerId, list);
+    }
+
+    let promoted = 0;
+    let cleaned = 0;
+    let deleted = 0;
+
+    for (const [, list] of byDealer) {
+      // "<info@x.com>" is a real address wearing angle brackets — unwrap before judging.
+      for (const e of list) {
+        const unwrapped = e.address.replace(/^[<"']+|[>"']+$/g, '').trim().toLowerCase();
+        if (unwrapped !== e.address && isPlausibleEmail(unwrapped)) {
+          await this.prisma.dealerEmail.update({ where: { id: e.id }, data: { address: unwrapped } });
+          e.address = unwrapped;
+          cleaned++;
+        }
+      }
+
+      const primary = list.find((e) => e.isPrimary) ?? list[0];
+      if (primary && !isPlausibleEmail(primary.address)) {
+        const better = list.find((e) => isPlausibleEmail(e.address));
+        if (better) {
+          await this.prisma.dealerEmail.updateMany({
+            where: { dealerId: better.dealerId },
+            data: { isPrimary: false },
+          });
+          await this.prisma.dealerEmail.update({ where: { id: better.id }, data: { isPrimary: true } });
+          promoted++;
+        }
+      }
+    }
+
+    if (body?.deleteJunk === true) {
+      const junk = (
+        await this.prisma.dealerEmail.findMany({ select: { id: true, address: true } })
+      ).filter((e) => !isPlausibleEmail(e.address));
+      if (junk.length > 0) {
+        const res = await this.prisma.dealerEmail.deleteMany({ where: { id: { in: junk.map((j) => j.id) } } });
+        deleted = res.count;
+      }
+    }
+
+    return { promoted, cleaned, deleted };
+  }
+
   /** The review queue — fuzzy matches waiting for a human (§5.1, §10.1).
    *  Declared before ':id' — Nest matches literal path segments in registration
    *  order, and 'duplicates' would otherwise be swallowed as a dealer id. */
