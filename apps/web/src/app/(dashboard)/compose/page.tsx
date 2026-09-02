@@ -68,14 +68,20 @@ export default function ComposePage() {
       setResults(null);
       return;
     }
+    let current = true;
     const timer = setTimeout(() => {
       setSearching(true);
       apiFetch<Dealer[]>(`/contacts?search=${encodeURIComponent(query.trim())}&take=25`)
-        .then(setResults)
-        .catch((err) => setError(err instanceof ApiError ? err.message : 'Search failed'))
-        .finally(() => setSearching(false));
+        // Guarded: a slower earlier request must not overwrite a newer one's
+        // results, or the list shows matches for a query you already replaced.
+        .then((rows) => current && setResults(rows))
+        .catch((err) => current && setError(err instanceof ApiError ? err.message : 'Search failed'))
+        .finally(() => current && setSearching(false));
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
   }, [query]);
 
   const primaryEmail = useMemo(() => {

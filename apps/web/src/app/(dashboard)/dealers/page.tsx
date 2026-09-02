@@ -99,6 +99,7 @@ export default function DealersPage() {
   const [filterCategory, setFilterCategory] = useState('');
   const [filterSource, setFilterSource] = useState('');
 
+  const loadGeneration = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [source, setSource] = useState('MANUAL');
@@ -121,12 +122,21 @@ export default function DealersPage() {
     if (debouncedSearch) params.set('search', debouncedSearch);
     if (sort) params.set('sort', sort);
     const qs = params.toString();
+
+    // Every load stamps a generation and only the newest one is allowed to write
+    // state. Without this, changing the filter fires a second request while the
+    // first is still in flight, and whichever *responds* last wins — which showed
+    // up as a search for "chennai" displaying the full unfiltered list, because
+    // the earlier request happened to resolve second.
+    const generation = ++loadGeneration.current;
+    const fresh = () => generation === loadGeneration.current;
+
     apiFetch<Dealer[]>(`/contacts${qs ? `?${qs}` : ''}`)
-      .then(setDealers)
-      .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load dealers'));
+      .then((rows) => fresh() && setDealers(rows))
+      .catch((err) => fresh() && setLoadError(err instanceof ApiError ? err.message : 'Failed to load dealers'));
     apiFetch<{ total: number }>(`/contacts/count${qs ? `?${qs}` : ''}`)
-      .then((r) => setTotal(r.total))
-      .catch(() => setTotal(null));
+      .then((r) => fresh() && setTotal(r.total))
+      .catch(() => fresh() && setTotal(null));
   }, [stage, debouncedSearch, sort]);
 
   useEffect(() => {
