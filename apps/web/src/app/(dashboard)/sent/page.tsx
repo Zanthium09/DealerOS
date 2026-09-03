@@ -24,7 +24,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell } from 'recharts';
 import { toast } from 'sonner';
-import { Mail, RotateCw } from 'lucide-react';
+import { Mail, RotateCw, Reply } from 'lucide-react';
 
 type Interaction = {
   id: string;
@@ -40,7 +40,10 @@ type Interaction = {
   dealer: { businessName: string } | null;
   sentAt: string;
   lastEventAt: string;
-  timeline: { status: string; at: string }[];
+  replyBody: string | null;
+  repliedAt: string | null;
+  replyCount: number;
+  timeline: { status: string; direction: string; at: string }[];
 };
 
 type FailedDraft = {
@@ -269,19 +272,20 @@ export default function SentPage() {
               <TableHead>Dealer</TableHead>
               <TableHead>Subject</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Reply</TableHead>
               <TableHead>When</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {interactions === null ? (
               <TableRow>
-                <TableCell colSpan={4}>
+                <TableCell colSpan={5}>
                   <Skeleton className="h-6 w-full" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={3} className="py-10 text-center text-muted-foreground">
+                <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <Mail className="size-8" />
                     Nothing sent in this range.
@@ -299,6 +303,15 @@ export default function SentPage() {
                     <Badge variant={STATUS_VARIANT[i.status] ?? 'outline'} className={STATUS_CLASS[i.status]}>
                       {i.status}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {i.replyCount > 0 ? (
+                      <span className="flex items-center gap-1 text-sm font-medium text-green-700">
+                        <Reply className="size-3.5" /> {i.replyCount === 1 ? 'Replied' : `${i.replyCount} replies`}
+                      </span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{new Date(i.createdAt).toLocaleString()}</TableCell>
                 </TableRow>
@@ -347,7 +360,20 @@ export default function SentPage() {
               Failed: {openItem.errorText}
             </p>
           )}
-          <p className="max-h-96 overflow-y-auto whitespace-pre-wrap text-sm">{openItem?.body}</p>
+          {openItem?.replyBody && (
+            <div className="space-y-1 rounded-lg border border-green-300 bg-green-50 p-3">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-green-700">
+                <Reply className="size-3.5" />
+                Their reply{openItem.replyCount > 1 ? `s (${openItem.replyCount})` : ''}
+                {openItem.repliedAt && ` — ${new Date(openItem.repliedAt).toLocaleString()}`}
+              </p>
+              <p className="whitespace-pre-wrap text-sm text-foreground">{openItem.replyBody}</p>
+            </div>
+          )}
+          <div className="space-y-1">
+            {openItem?.replyBody && <p className="text-xs font-medium text-muted-foreground">What we sent</p>}
+            <p className="max-h-96 overflow-y-auto whitespace-pre-wrap text-sm">{openItem?.body}</p>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

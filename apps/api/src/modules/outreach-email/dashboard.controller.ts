@@ -167,10 +167,14 @@ export class OutreachEmailDashboardController {
 
     const byMessage = new Map<string, typeof events>();
     for (const e of events) {
-      // A FAILED send never reached the provider, so it has no message id — key it
-      // by its own id so it still appears as its own message rather than merging
-      // every failure into one bucket.
-      const key = e.providerMessageId ?? `local:${e.id}`;
+      // messageDraftId is the thread key, not providerMessageId: an inbound reply
+      // shares the original draft's id but has NO providerMessageId of its own (it
+      // never went through the provider), so grouping by providerMessageId put a
+      // reply in a separate, unconnected row with no visible link to what it
+      // replied to — exactly the "where is the reply" gap. A FAILED send has
+      // neither id, so it still falls back to its own row rather than merging with
+      // an unrelated one.
+      const key = e.messageDraftId ?? e.providerMessageId ?? `local:${e.id}`;
       const list = byMessage.get(key) ?? [];
       list.push(e);
       byMessage.set(key, list);
@@ -178,24 +182,38 @@ export class OutreachEmailDashboardController {
 
     return [...byMessage.values()]
       .map((list) => {
-        const oldest = list[list.length - 1];
+        // `list` is newest-first (the query's own order). Subject/recipient/body
+        // must come from what WE sent, not from whichever event happens to be
+        // newest — a reply is also "an event with a body", and without this split
+        // an incoming reply's text would silently replace the outbound body shown
+        // as "what was sent".
+        const outbound = list.filter((e) => e.direction === 'OUTBOUND');
+        const inbound = list.filter((e) => e.direction === 'INBOUND');
+        const oldest = outbound[outbound.length - 1] ?? list[list.length - 1];
+        const latestReply = inbound[0] ?? null;
+        // REPLIED already outranks DELIVERED/OPENED/CLICKED (STATUS_RANK), so
+        // including inbound events in this pool is what makes a replied thread
+        // correctly show status "REPLIED" rather than getting stuck on "OPENED".
         const best = list.reduce((a, b) => (STATUS_RANK[b.status] > STATUS_RANK[a.status] ? b : a));
-        const failure = list.find((e) => e.errorText);
+        const failure = outbound.find((e) => e.errorText);
         return {
           id: oldest.id,
           dealerId: oldest.dealerId,
           dealer: oldest.dealer,
           direction: oldest.direction,
           providerMessageId: oldest.providerMessageId,
-          subject: list.find((e) => e.subject)?.subject ?? '',
-          toAddress: list.find((e) => e.toAddress)?.toAddress ?? '',
-          body: list.find((e) => e.body)?.body ?? '',
+          subject: outbound.find((e) => e.subject)?.subject ?? '',
+          toAddress: outbound.find((e) => e.toAddress)?.toAddress ?? '',
+          body: outbound.find((e) => e.body)?.body ?? '',
           status: best.status,
           errorText: failure?.errorText ?? null,
           sentAt: oldest.createdAt,
           lastEventAt: list[0].createdAt,
+          replyBody: latestReply?.body ?? null,
+          repliedAt: latestReply?.createdAt ?? null,
+          replyCount: inbound.length,
           timeline: list
-            .map((e) => ({ status: e.status, at: e.createdAt }))
+            .map((e) => ({ status: e.status, direction: e.direction, at: e.createdAt }))
             .sort((a, b) => a.at.getTime() - b.at.getTime()),
         };
       })
