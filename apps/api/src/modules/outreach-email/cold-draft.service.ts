@@ -18,9 +18,10 @@ import { SOURCE_MODULE } from './send.service';
  * ordinary state, not a missing-config error.
  */
 const DEFAULT_COLD_TEMPLATE = template(
-  'Hello {{contactName}}, I am reaching out from {{ourBusinessName}} — we distribute ' +
-    'to businesses like {{businessName}} and would love to explore working together as ' +
-    'a dealer. If this sounds interesting, please reply and we can share more.',
+  'Hi {{contactName}},\n\n' +
+    "I'm reaching out from {{ourBusinessName}}. I came across {{businessName}} and " +
+    "wanted to check if you'd be open to working together as a dealer.\n\n" +
+    "Happy to share more if you're interested — just reply here.",
 );
 
 @Injectable()
@@ -97,8 +98,11 @@ export class ColdDraftService {
  * A batch of cold emails sharing one byte-identical subject is the pattern bulk
  * filters look for — which is what the previous hardcoded "A note about your
  * business" was, on every message the app had ever sent.
+ *
+ * Phrased as a question, not an announcement — "Dealer partnership enquiry" reads
+ * like a mail-merge subject line; a question reads like something a person typed.
  */
-const DEFAULT_SUBJECT_TEMPLATE = 'Dealer partnership enquiry — {{businessName}}';
+const DEFAULT_SUBJECT_TEMPLATE = 'Quick question, {{businessName}}';
 
 function placeholderNeeded(skeleton: string, key: string): boolean {
   return skeleton.includes(`{{${key}}}`);

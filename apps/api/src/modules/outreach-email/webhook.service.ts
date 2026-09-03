@@ -43,38 +43,56 @@ export class OutreachEmailWebhookService {
     const organizationId = event.tags.organizationId;
     if (!organizationId) return; // nothing to attribute the touch to
 
-    await runWithOrg(organizationId, async () => {
-      const dealerId = event.tags.dealerId;
-      const messageDraftId = event.tags.messageDraftId ?? null;
-      if (!dealerId) return;
+    try {
+      await runWithOrg(organizationId, async () => {
+        const dealerId = event.tags.dealerId;
+        const messageDraftId = event.tags.messageDraftId ?? null;
+        if (!dealerId) return;
 
-      await this.prisma.interactionEvent.create({
-        data: {
-          dealerId,
-          channel: 'EMAIL',
-          direction: 'OUTBOUND',
-          messageDraftId,
-          providerMessageId: event.providerMessageId,
-          status: event.type,
-          // A delivery-status touch has no new body of its own — it is the original
-          // send's outcome, so the SENT row already carries "what exactly did we send".
-          body: '',
-        } as Prisma.InteractionEventUncheckedCreateInput,
-      });
-
-      if (event.type === 'BOUNCED') {
-        await writeConsent(this.prisma, {
-          organizationId,
-          dealerId,
-          channel: 'EMAIL',
-          state: 'OPTED_OUT',
-          source: 'BOUNCE',
+        await this.prisma.interactionEvent.create({
+          data: {
+            dealerId,
+            channel: 'EMAIL',
+            direction: 'OUTBOUND',
+            messageDraftId,
+            providerMessageId: event.providerMessageId,
+            status: event.type,
+            // A delivery-status touch has no new body of its own — it is the original
+            // send's outcome, so the SENT row already carries "what exactly did we send".
+            body: '',
+          } as Prisma.InteractionEventUncheckedCreateInput,
         });
-        await this.sequence.cancel(organizationId, dealerId);
-      }
-      if (event.type === 'CLICKED') {
-        await this.sequence.cancel(organizationId, dealerId);
-      }
-    });
+
+        if (event.type === 'BOUNCED') {
+          await writeConsent(this.prisma, {
+            organizationId,
+            dealerId,
+            channel: 'EMAIL',
+            state: 'OPTED_OUT',
+            source: 'BOUNCE',
+          });
+          await this.sequence.cancel(organizationId, dealerId);
+        }
+        if (event.type === 'CLICKED') {
+          await this.sequence.cancel(organizationId, dealerId);
+        }
+      });
+      await this.prisma.webhookEvent.update({
+        where: { provider_providerEventId: { provider: 'resend', providerEventId: event.providerEventId } },
+        data: { processedAt: new Date() },
+      });
+    } catch (err) {
+      // Same reasoning as inbound-webhook.service.ts: the WebhookEvent row above
+      // already committed for idempotency, so a failure here (not a dedupe hit —
+      // those already returned) would otherwise mark this delivery event "seen"
+      // forever with nothing actually recorded, and Resend's retry would give up
+      // at the dedupe check before ever reaching this code again. Delete it so a
+      // real failure is retriable instead of silently dropping an OPENED/CLICKED/
+      // BOUNCED/REPLIED touch.
+      await this.prisma.webhookEvent
+        .delete({ where: { provider_providerEventId: { provider: 'resend', providerEventId: event.providerEventId } } })
+        .catch(() => {});
+      throw err;
+    }
   }
 }

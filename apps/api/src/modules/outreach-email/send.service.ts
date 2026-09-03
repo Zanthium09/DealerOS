@@ -237,7 +237,7 @@ export class EmailSendService {
 
 /** Used when a draft carries no subject of its own (older rows, and the seeded
  *  default template before an org writes its own). */
-export const DEFAULT_SUBJECT = 'Dealer partnership enquiry';
+export const DEFAULT_SUBJECT = 'Quick question';
 
 /**
  * Deliberately permissive: one @, a dot-bearing domain, no spaces. Not RFC 5322 —

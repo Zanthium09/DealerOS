@@ -228,7 +228,7 @@ export class OutreachEmailDashboardController {
   @Post('drafts/backfill-subjects')
   async backfillSubjects() {
     const active = await this.prisma.outreachTemplate.findFirst({ where: { isActive: true } });
-    const pattern = active?.subject?.trim() || 'Dealer partnership enquiry — {{businessName}}';
+    const pattern = active?.subject?.trim() || 'Quick question, {{businessName}}';
 
     const drafts = await this.prisma.messageDraft.findMany({
       where: { sourceModule: SOURCE_MODULE, subject: '', status: { in: ['PENDING', 'APPROVED'] } },
@@ -249,6 +249,22 @@ export class OutreachEmailDashboardController {
       updated++;
     }
     return { updated };
+  }
+
+  /**
+   * Raw webhook receipts — what actually arrived from the provider, independent of
+   * anything this app derived from it. `processedAt: null` with no `error` means the
+   * event is still mid-flight or (before this fix existed) was silently swallowed by
+   * a failure after the idempotency row committed; `error` set means it failed and
+   * was rolled back for retry, not lost.
+   */
+  @Get('webhook-events')
+  webhookEvents(@Query('provider') provider?: string, @Query('take') take?: string) {
+    return this.prisma.webhookEvent.findMany({
+      where: provider ? { provider } : { provider: { in: ['resend', 'resend-inbound'] } },
+      orderBy: { receivedAt: 'desc' },
+      take: Math.min(Number(take) || 50, 200),
+    });
   }
 
   /** Outbound controls: throttle on/off, daily limit, pacing, channel pause (§12.6). */
