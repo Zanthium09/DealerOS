@@ -22,9 +22,12 @@ import { PrismaClient } from '@prisma/client';
 import { CurrentTenantSession, TenantAuthGuard } from '../../core/auth';
 import type { TenantSession } from '../../core/auth';
 import { PRISMA } from '../../core/tenancy/tenancy.module';
+import { getOrgId } from '../../core/tenancy/tenancy';
 import { ImportService } from './import.service';
 import { MergeService } from './merge.service';
-import type { ColumnMapping } from './normalize';
+import { DedupService } from './dedup.service';
+import { normalizePhone } from './normalize';
+import type { ColumnMapping, NormalizedRow } from './normalize';
 
 @Controller('contacts')
 @UseGuards(TenantAuthGuard)
@@ -33,6 +36,7 @@ export class ContactsController {
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     private readonly imports: ImportService,
     private readonly merges: MergeService,
+    private readonly dedup: DedupService,
   ) {}
 
   /** Upload → detected headers + suggested mapping. `source` is mandatory (§5.1). */
@@ -129,6 +133,70 @@ export class ContactsController {
         },
       })
       .then((total) => ({ total }));
+  }
+
+  /**
+   * One dealer, typed by hand — not a file import. For a company that came up in
+   * conversation and isn't in the list yet: type the name and address, get a real
+   * Dealer back, and Compose can send to it immediately.
+   *
+   * Reuses the same dedup (exact email/phone match wins) and creation shape as a
+   * bulk import — §5.1's "never auto-merge on fuzzy" doesn't apply here since a
+   * single manually-typed row has no city to fuzzy-match against; only an exact
+   * hit is possible, and an exact hit is the existing dealer, correctly.
+   */
+  @Post('quick-add')
+  async quickAdd(
+    @Body() body: { businessName?: unknown; email?: unknown; contactPersonName?: unknown; phone?: unknown },
+  ) {
+    const businessName = String(body?.businessName ?? '').trim();
+    if (!businessName) throw new BadRequestException('businessName is required');
+    const email = String(body?.email ?? '').trim().toLowerCase();
+    if (email && !isPlausibleEmail(email)) throw new BadRequestException(`"${email}" is not a valid email address`);
+    const contactPersonName = typeof body?.contactPersonName === 'string' ? body.contactPersonName.trim() || null : null;
+    const phoneRaw = typeof body?.phone === 'string' ? body.phone.trim() : '';
+
+    const row: NormalizedRow = {
+      businessName,
+      contactPersonName,
+      region: null,
+      city: null,
+      state: null,
+      businessCategory: null,
+      phones: phoneRaw ? [normalizePhone(phoneRaw)] : [],
+      emails: email ? [email] : [],
+      dedupeKey: email ? `e:${email}` : `n:${businessName.toLowerCase()}`,
+    };
+
+    const match = await this.dedup.findMatch(row);
+    if (match?.confirmed) {
+      const existing = await this.prisma.dealer.findFirst({ where: { id: match.dealerId }, include: { emails: true } });
+      return { dealer: existing, wasExisting: true };
+    }
+
+    const dealer = await this.prisma.dealer.create({
+      data: {
+        organizationId: getOrgId()!,
+        businessName: row.businessName,
+        contactPersonName: row.contactPersonName,
+        source: 'MANUAL',
+        pipelineStage: 'NEW',
+        dedupeKey: row.dedupeKey,
+        phones: { create: row.phones.map((p, i) => ({ raw: p.raw, e164: p.e164, valid: p.valid, isPrimary: i === 0 })) },
+        emails: { create: row.emails.map((address, i) => ({ address, isPrimary: i === 0 })) },
+        // §1.6: typing an address in does not imply the dealer opted in — same
+        // UNKNOWN-per-channel rule as a bulk import (import.service.ts).
+        consentLogs: {
+          create: (['EMAIL', 'WHATSAPP', 'CALL'] as const).map((channel) => ({
+            channel,
+            state: 'UNKNOWN' as const,
+            source: 'IMPORT_DEFAULT' as const,
+          })),
+        },
+      },
+      include: { emails: true },
+    });
+    return { dealer, wasExisting: false };
   }
 
   /**

@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Search, Send, Save, Building2, Mail } from 'lucide-react';
+import { Search, Send, Save, Building2, Mail, UserPlus } from 'lucide-react';
 
 type Dealer = {
   id: string;
@@ -43,10 +43,18 @@ const PLACEHOLDERS = [
 ];
 
 export default function ComposePage() {
+  const [mode, setMode] = useState<'search' | 'manual'>('search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Dealer[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<Dealer | null>(null);
+
+  const [manualName, setManualName] = useState('');
+  const [manualEmail, setManualEmail] = useState('');
+  const [manualPhone, setManualPhone] = useState('');
+  const [manualContact, setManualContact] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   const [subject, setSubject] = useState('');
   const [bodyText, setBodyText] = useState('');
@@ -88,6 +96,35 @@ export default function ComposePage() {
     if (!selected) return null;
     return selected.emails.find((e) => e.isPrimary) ?? selected.emails[0] ?? null;
   }, [selected]);
+
+  async function addManual() {
+    if (!manualName.trim()) return;
+    setManualBusy(true);
+    setManualError(null);
+    try {
+      const res = await apiFetch<{ dealer: Dealer; wasExisting: boolean }>('/contacts/quick-add', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessName: manualName,
+          email: manualEmail,
+          phone: manualPhone,
+          contactPersonName: manualContact,
+        }),
+      });
+      setSelected(res.dealer);
+      if (res.wasExisting) toast.info(`${res.dealer.businessName} is already in your dealers — using that record`);
+      else toast.success(`${res.dealer.businessName} added`);
+      setManualName('');
+      setManualEmail('');
+      setManualPhone('');
+      setManualContact('');
+      setMode('search');
+    } catch (err) {
+      setManualError(err instanceof ApiError ? err.message : 'Could not add company');
+    } finally {
+      setManualBusy(false);
+    }
+  }
 
   function applyTemplate(id: string | null) {
     const t = templates.find((x) => x.id === id);
@@ -146,45 +183,119 @@ export default function ComposePage() {
         <Card className="h-fit">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Search className="size-4" /> Find a company
+              {mode === 'search' ? <Search className="size-4" /> : <UserPlus className="size-4" />}
+              {mode === 'search' ? 'Find a company' : 'Add a new company'}
             </CardTitle>
+            <div className="flex gap-1 pt-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={mode === 'search' ? 'default' : 'outline'}
+                onClick={() => setMode('search')}
+              >
+                Search existing
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={mode === 'manual' ? 'default' : 'outline'}
+                onClick={() => setMode('manual')}
+              >
+                Type it in
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Input
-              placeholder="Business name, city, email…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+            {mode === 'search' ? (
+              <>
+                <Input
+                  placeholder="Business name, city, email…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
 
-            {searching && <Skeleton className="h-20 w-full" />}
+                {searching && <Skeleton className="h-20 w-full" />}
 
-            {results !== null && !searching && (
-              <div className="max-h-96 space-y-1 overflow-y-auto">
-                {results.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted-foreground">No companies matched.</p>
-                ) : (
-                  results.map((d) => (
-                    <button
-                      key={d.id}
-                      onClick={() => setSelected(d)}
-                      className={`w-full rounded-lg border p-2 text-left text-sm transition-colors hover:bg-accent ${
-                        selected?.id === d.id ? 'border-primary bg-accent' : ''
-                      }`}
-                    >
-                      <p className="font-medium">{d.businessName}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {[d.city, d.state].filter(Boolean).join(', ') || 'No location'}
+                {results !== null && !searching && (
+                  <div className="max-h-96 space-y-1 overflow-y-auto">
+                    {results.length === 0 ? (
+                      <p className="py-6 text-center text-sm text-muted-foreground">
+                        No companies matched. Not in the list yet?{' '}
+                        <button type="button" className="underline" onClick={() => setMode('manual')}>
+                          Type it in
+                        </button>
+                        .
                       </p>
-                    </button>
-                  ))
+                    ) : (
+                      results.map((d) => (
+                        <button
+                          key={d.id}
+                          onClick={() => setSelected(d)}
+                          className={`w-full rounded-lg border p-2 text-left text-sm transition-colors hover:bg-accent ${
+                            selected?.id === d.id ? 'border-primary bg-accent' : ''
+                          }`}
+                        >
+                          <p className="font-medium">{d.businessName}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {[d.city, d.state].filter(Boolean).join(', ') || 'No location'}
+                          </p>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
 
-            {results === null && !searching && (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Type at least two characters to search.
-              </p>
+                {results === null && !searching && (
+                  <p className="py-6 text-center text-sm text-muted-foreground">
+                    Type at least two characters to search.
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="manualName">Company name</Label>
+                  <Input
+                    id="manualName"
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    placeholder="Acme Traders"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="manualEmail">Email</Label>
+                  <Input
+                    id="manualEmail"
+                    type="email"
+                    value={manualEmail}
+                    onChange={(e) => setManualEmail(e.target.value)}
+                    placeholder="owner@acmetraders.com"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="manualContact">Contact person (optional)</Label>
+                  <Input
+                    id="manualContact"
+                    value={manualContact}
+                    onChange={(e) => setManualContact(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="manualPhone">Phone (optional)</Label>
+                  <Input id="manualPhone" value={manualPhone} onChange={(e) => setManualPhone(e.target.value)} />
+                </div>
+                {manualError && <p className="text-sm text-destructive">{manualError}</p>}
+                <Button
+                  className="w-full"
+                  disabled={manualBusy || !manualName.trim() || !manualEmail.trim()}
+                  onClick={addManual}
+                >
+                  <UserPlus className="size-4" /> {manualBusy ? 'Adding…' : 'Add and continue'}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Creates a real dealer record — this shows up in Dealers too, with no consent assumed.
+                </p>
+              </>
             )}
           </CardContent>
         </Card>
