@@ -14,6 +14,7 @@ import {
   Building2,
   PenLine,
   Megaphone,
+  Reply,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -41,6 +42,7 @@ const NAV = [
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
   { href: '/queue', label: 'Approval Queue', icon: ClipboardCheck },
   { href: '/sent', label: 'Sent', icon: Send },
+  { href: '/replies', label: 'Replies', icon: Reply },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

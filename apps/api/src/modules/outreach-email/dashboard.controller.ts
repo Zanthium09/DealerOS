@@ -159,7 +159,7 @@ export class OutreachEmailDashboardController {
    * its own event timeline.
    */
   @Get('messages')
-  async messages(@Query('take') take?: string) {
+  async messages(@Query('take') take?: string, @Query('onlyReplied') onlyReplied?: string) {
     const events = await this.prisma.interactionEvent.findMany({
       where: { channel: 'EMAIL' },
       orderBy: { createdAt: 'desc' },
@@ -219,7 +219,8 @@ export class OutreachEmailDashboardController {
             .sort((a, b) => a.at.getTime() - b.at.getTime()),
         };
       })
-      .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+      .filter((m) => (onlyReplied === 'true' ? m.replyCount > 0 : true))
+      .sort((a, b) => (onlyReplied === 'true' ? b.repliedAt!.getTime() - a.repliedAt!.getTime() : b.sentAt.getTime() - a.sentAt.getTime()));
   }
 
   /**
