@@ -305,6 +305,18 @@ export class OutreachEmailDashboardController {
     }
   }
 
+  /** The raw headers Resend captured for one received reply — for diagnosing why
+   *  a specific reply failed to thread back to a send (findThreadedMessageId). */
+  @Get('webhook-events/:id/raw')
+  async rawWebhookEvent(@Param('id') id: string) {
+    const row = await this.prisma.webhookEvent.findFirst({ where: { id } });
+    if (!row) throw new BadRequestException(`no webhook event ${id}`);
+    const emailId = (row.payload as { emailId?: string })?.emailId;
+    if (!emailId) throw new BadRequestException("no emailId in this event's stored payload");
+    const full = await this.emailProvider.fetchReceivedEmail(emailId);
+    return { subject: full.subject, fromAddress: full.fromAddress, headers: full.headers };
+  }
+
   /** Outbound controls: throttle on/off, daily limit, pacing, channel pause (§12.6). */
   @Get('settings')
   async settings(@CurrentTenantSession() session: TenantSession) {
