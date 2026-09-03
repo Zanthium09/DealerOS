@@ -8,6 +8,7 @@ import { ApprovalError, ApprovalService } from '../../core/approval';
 import { OutreachEmailService } from './outreach-email.service';
 import type { ColdOutreachOptions } from './outreach-email.service';
 import { EmailSendService, SOURCE_MODULE } from './send.service';
+import { EMAIL_PROVIDER, EmailProvider } from '../../providers/email';
 import { SequenceService } from './sequence.service';
 import { CustomDraftService } from './custom-draft.service';
 import { renderPlain } from './cold-draft.service';
@@ -40,6 +41,7 @@ export class OutreachEmailDashboardController {
     private readonly customDraft_: CustomDraftService,
     private readonly settingsService: OutreachSettingsService,
     private readonly throttleImpl: EmailSendThrottle,
+    @Inject(EMAIL_PROVIDER) private readonly emailProvider: EmailProvider,
   ) {}
 
   /**
@@ -314,6 +316,20 @@ export class OutreachEmailDashboardController {
   async verifyIdentity(@Param('id') id: string) {
     await this.prisma.sendingIdentity.update({ where: { id }, data: { verificationStatus: 'VERIFIED' } });
     return { ok: true };
+  }
+
+  /**
+   * What Resend actually reports for this domain — independent of the manual
+   * VERIFIED flag above, which a person clicks and is never itself checked against
+   * the provider. This is the only way to know if SPF/DKIM/DMARC are genuinely
+   * configured and passing, which is a materially bigger deliverability factor than
+   * anything in the email's own content or template.
+   */
+  @Get('sending-identities/:id/dns-status')
+  async dnsStatus(@Param('id') id: string) {
+    const identity = await this.prisma.sendingIdentity.findFirst({ where: { id } });
+    if (!identity) throw new BadRequestException(`no sending identity ${id}`);
+    return this.emailProvider.getDomainStatus(identity.domain);
   }
 
   /**
