@@ -9,6 +9,7 @@ import { OutreachEmailService } from './outreach-email.service';
 import type { ColdOutreachOptions } from './outreach-email.service';
 import { EmailSendService, SOURCE_MODULE } from './send.service';
 import { EMAIL_PROVIDER, EmailProvider } from '../../providers/email';
+import { InboundEmailService } from './inbound.service';
 import { SequenceService } from './sequence.service';
 import { CustomDraftService } from './custom-draft.service';
 import { renderPlain } from './cold-draft.service';
@@ -42,6 +43,7 @@ export class OutreachEmailDashboardController {
     private readonly settingsService: OutreachSettingsService,
     private readonly throttleImpl: EmailSendThrottle,
     @Inject(EMAIL_PROVIDER) private readonly emailProvider: EmailProvider,
+    private readonly inboundEmailService: InboundEmailService,
   ) {}
 
   /**
@@ -265,6 +267,42 @@ export class OutreachEmailDashboardController {
       orderBy: { receivedAt: 'desc' },
       take: Math.min(Number(take) || 50, 200),
     });
+  }
+
+  /**
+   * Re-runs processing for one already-received webhook, using the emailId still
+   * sitting in its stored payload — for exactly the rows the pre-fix bug left
+   * stranded: `processedAt: null, error: null` forever, with no future retry from
+   * the provider going to help since the dedupe row already exists. This bypasses
+   * signature verification (the row's existence already proves it was received)
+   * and, unlike the live path, does NOT swallow a genuine InboundEmailError —
+   * a manual replay should surface exactly why it failed, not hide it again.
+   */
+  @Post('webhook-events/:id/replay')
+  async replayWebhookEvent(@Param('id') id: string) {
+    const row = await this.prisma.webhookEvent.findFirst({ where: { id } });
+    if (!row) throw new BadRequestException(`no webhook event ${id}`);
+    if (row.provider !== 'resend-inbound') {
+      throw new BadRequestException('replay is only implemented for resend-inbound events');
+    }
+    const emailId = (row.payload as { emailId?: string })?.emailId;
+    if (!emailId) throw new BadRequestException('no emailId in this event\'s stored payload');
+
+    try {
+      const full = await this.emailProvider.fetchReceivedEmail(emailId);
+      await this.inboundEmailService.handle({
+        headers: full.headers,
+        subject: full.subject,
+        body: full.text ?? full.html ?? '',
+        fromAddress: full.fromAddress,
+      });
+      await this.prisma.webhookEvent.update({ where: { id }, data: { processedAt: new Date(), error: null } });
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.prisma.webhookEvent.update({ where: { id }, data: { error: message } });
+      throw new BadRequestException(message);
+    }
   }
 
   /** Outbound controls: throttle on/off, daily limit, pacing, channel pause (§12.6). */
