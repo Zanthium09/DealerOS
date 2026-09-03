@@ -33,7 +33,7 @@ export class InboundEmailService {
   ) {}
 
   async handle(email: InboundEmail): Promise<void> {
-    const threaded = findThreadedMessageId(email.headers) ?? (await this.findByProviderMessageId(email.headers));
+    const threaded = findThreadedMessageId(email.headers) ?? (await this.findByReplyAddress(email.fromAddress));
     if (!threaded) {
       throw new InboundEmailError('inbound email does not thread back to a message this module sent');
     }
@@ -110,39 +110,37 @@ export class InboundEmailService {
    * entirely, same as DedupService's fuzzy match, which is unscoped for the same
    * structural reason; the WHERE clause here is the only thing keeping it correct.
    *
-   * ponytail: an unindexed scan over the last 2000 sends, not a lookup by key —
-   * this app's whole send volume is nowhere near that per day. Upgrade to storing
-   * the SES-side id directly (re-fetched right after send) if reply volume ever
-   * makes this scan itself the bottleneck.
+   * An earlier version of this fallback tried to match a substring of the
+   * providerMessageId Resend returns inside SES's rewritten Message-ID, on the
+   * theory that Resend embeds it. Checked against two real replies: it does not —
+   * the two ids only share a short prefix because both are timestamp-ordered ids
+   * minted in the same instant, not because one contains the other. That match
+   * would have silently threaded replies onto the wrong send once two dealers
+   * happened to be emailed close enough together in time. Matching on the
+   * reply's own From address against who we actually sent to is what those same
+   * two real replies confirmed works: the address on the wire matched the stored
+   * DealerEmail exactly, in both cases.
+   *
+   * ponytail: "most recent send to this address," not "the specific send this is
+   * a reply to" — indistinguishable from the address alone if the same dealer
+   * was emailed more than once. Good enough at this app's volume; revisit if a
+   * dealer ever gets a second campaign before replying to the first.
    */
-  private async findByProviderMessageId(
-    headers: Record<string, string>,
+  private async findByReplyAddress(
+    fromAddress: string,
   ): Promise<{ organizationId: string; interactionEventId: string } | null> {
-    const raw = [
-      headers['In-Reply-To'],
-      headers['in-reply-to'],
-      headers['References'],
-      headers['references'],
-    ].filter((v): v is string => !!v);
-    if (raw.length === 0) return null;
+    const address = (fromAddress.match(/<([^>]+)>/)?.[1] ?? fromAddress).trim().toLowerCase();
+    if (!address) return null;
 
-    const haystacks = raw.map((v) => v.replace(/[^a-f0-9]/gi, '').toLowerCase());
-    const candidates = await this.prisma.$queryRaw<
-      { id: string; organizationId: string; providerMessageId: string }[]
-    >`
-      SELECT id, "organizationId", "providerMessageId"
-      FROM "InteractionEvent"
-      WHERE channel = 'EMAIL' AND direction = 'OUTBOUND' AND "providerMessageId" IS NOT NULL
-      ORDER BY "createdAt" DESC
-      LIMIT 2000
+    const rows = await this.prisma.$queryRaw<{ id: string; organizationId: string }[]>`
+      SELECT ie.id, ie."organizationId"
+      FROM "InteractionEvent" ie
+      JOIN "DealerEmail" de ON de."dealerId" = ie."dealerId" AND de."organizationId" = ie."organizationId"
+      WHERE ie.channel = 'EMAIL' AND ie.direction = 'OUTBOUND' AND lower(de.address) = ${address}
+      ORDER BY ie."createdAt" DESC
+      LIMIT 1
     `;
-
-    for (const c of candidates) {
-      const needle = c.providerMessageId.replace(/-/g, '').toLowerCase();
-      if (needle.length >= 8 && haystacks.some((h) => h.includes(needle))) {
-        return { organizationId: c.organizationId, interactionEventId: c.id };
-      }
-    }
-    return null;
+    const hit = rows[0];
+    return hit ? { organizationId: hit.organizationId, interactionEventId: hit.id } : null;
   }
 }
