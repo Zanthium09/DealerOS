@@ -126,6 +126,8 @@ model Organization {
   dormancySettings      DormancySettings?
   collectionsSettings   CollectionsSettings?
   collectionCases       CollectionCase[]
+  schemes               Scheme[]
+  schemeRecipients      SchemeRecipient[]
 }
 
 model User {
@@ -211,6 +213,7 @@ model Dealer {
   whatsappConversation WhatsAppConversation?
   callLogs             CallLog[]
   collectionCase       CollectionCase?
+  schemeRecipients     SchemeRecipient[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -766,7 +769,7 @@ model Order {
   orderDate      DateTime
   totalValue     Decimal     @db.Decimal(14, 2)
   source         OrderSource
-  // FK added with the Scheme model (M6); attribution is written by a matching rule.
+  // Written by the M6 attribution rule (dealer targeted + date range + product overlap).
   schemeId       String?
   syncBatchId    String?
   createdAt      DateTime    @default(now())
@@ -774,9 +777,11 @@ model Order {
   organization Organization    @relation(fields: [organizationId], references: [id])
   dealer       Dealer          @relation(fields: [organizationId, dealerId], references: [organizationId, id], onUpdate: Restrict)
   lineItems    OrderLineItem[]
+  scheme       Scheme?         @relation(fields: [schemeId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, id])
   @@unique([organizationId, externalRef])
+  @@index([schemeId])
   @@index([organizationId, dealerId, orderDate])
   @@index([organizationId, orderDate])
 }
@@ -1172,4 +1177,62 @@ model CollectionCase {
   @@unique([organizationId, dealerId])
   @@index([organizationId, level])
   @@index([organizationId, needsCall])
+}
+
+// ---- M6 schemes (§5.7) ----------------------------------------------------------------
+
+enum SchemeStatus {
+  DRAFT
+  ACTIVE
+  ENDED
+}
+
+// A trade scheme: terms the owner wrote, a set of products, a validity window, and a
+// deterministic rule choosing which dealers it is aimed at. Its terms are financial
+// commitments, so every message about it goes to the approval queue (§5.7).
+model Scheme {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  name                 String
+  description          String?
+  // Verbatim, as the owner wrote it ("Buy 10 cases, get 1 free"). Injected into messages
+  // as a database string — the model never restates or computes it (§1.4).
+  terms                String
+  // Product.id values. Attribution matches order lines on the SKUs of these.
+  applicableProductIds String[]
+  validFrom            DateTime
+  validTo              DateTime
+  // { categories?, states?, cities?, stages?, boughtSchemeProductsWithinDays? } — see modules/schemes/rules.ts
+  targetSegmentRule    Json         @default("{}")
+  status               SchemeStatus @default(DRAFT)
+  activatedAt          DateTime?
+  campaignId           String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  recipients   SchemeRecipient[]
+  orders       Order[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, status])
+}
+
+// Who the scheme was aimed at, snapshotted at activation: the segment is a function of
+// purchase history, which moves, and attribution must not shift under a finished scheme.
+model SchemeRecipient {
+  id             String   @id @default(cuid())
+  organizationId String
+  schemeId       String
+  dealerId       String
+  // The MessageDraft announcing it, once drafted. One per dealer per scheme.
+  draftId        String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  scheme       Scheme       @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([schemeId, dealerId])
+  @@index([organizationId, dealerId])
 }

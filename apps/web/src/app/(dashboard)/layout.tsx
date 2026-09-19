@@ -21,6 +21,7 @@ import {
   Phone,
   Moon,
   Wallet,
+  Tag,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -54,6 +55,7 @@ const NAV = [
   { href: '/calling', label: 'Calling', icon: Phone },
   { href: '/dormancy', label: 'Dormant Dealers', icon: Moon },
   { href: '/collections', label: 'Collections', icon: Wallet },
+  { href: '/schemes', label: 'Schemes', icon: Tag },
   { href: '/sync', label: 'Data Sync', icon: DatabaseZap },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/settings', label: 'Settings', icon: Settings },

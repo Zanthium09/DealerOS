@@ -29,6 +29,11 @@ export const AuditAction = {
    */
   LEAD_PROMOTED: 'LEAD_PROMOTED',
 
+  /** §5.7. entityId = the scheme. metadata: { recipients } */
+  SCHEME_ACTIVATED: 'SCHEME_ACTIVATED',
+  /** §5.7. entityId = the scheme. */
+  SCHEME_ENDED: 'SCHEME_ENDED',
+
   /** §5.1 / §10.1. entityId = surviving dealer. metadata must carry enough to reverse it. */
   DEALER_MERGED: 'DEALER_MERGED',
 } as const;
