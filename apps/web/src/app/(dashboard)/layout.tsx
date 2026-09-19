@@ -17,6 +17,7 @@ import {
   Reply,
   Radar,
   DatabaseZap,
+  MessageCircle,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -46,6 +47,7 @@ const NAV = [
   { href: '/queue', label: 'Approval Queue', icon: ClipboardCheck },
   { href: '/sent', label: 'Sent', icon: Send },
   { href: '/replies', label: 'Replies', icon: Reply },
+  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/sync', label: 'Data Sync', icon: DatabaseZap },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/settings', label: 'Settings', icon: Settings },
