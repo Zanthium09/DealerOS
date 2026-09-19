@@ -15,6 +15,8 @@ import {
   PenLine,
   Megaphone,
   Reply,
+  Radar,
+  DatabaseZap,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -38,11 +40,13 @@ import { Button } from '@/components/ui/button';
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dealers', label: 'Dealers', icon: Users },
+  { href: '/leads', label: 'Lead Discovery', icon: Radar },
   { href: '/compose', label: 'Compose', icon: PenLine },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
   { href: '/queue', label: 'Approval Queue', icon: ClipboardCheck },
   { href: '/sent', label: 'Sent', icon: Send },
   { href: '/replies', label: 'Replies', icon: Reply },
+  { href: '/sync', label: 'Data Sync', icon: DatabaseZap },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

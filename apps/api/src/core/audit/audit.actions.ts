@@ -23,6 +23,12 @@ export const AuditAction = {
   /** §9. metadata: { autoSendRuleId } */
   DRAFT_AUTO_SENT: 'DRAFT_AUTO_SENT',
 
+  /**
+   * M0 design doc §7 — the only path from a discovered candidate to a Dealer.
+   * entityId = the new dealer. metadata: { candidateId, discoveryRunId, sourceUrl }
+   */
+  LEAD_PROMOTED: 'LEAD_PROMOTED',
+
   /** §5.1 / §10.1. entityId = surviving dealer. metadata must carry enough to reverse it. */
   DEALER_MERGED: 'DEALER_MERGED',
 } as const;

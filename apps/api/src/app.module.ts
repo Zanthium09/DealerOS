@@ -14,6 +14,7 @@ import { EmailModule } from './providers/email/email.module';
 import { OutreachEmailModule } from './modules/outreach-email/outreach-email.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SyncModule } from './modules/sync';
+import { LeadDiscoveryModule } from './modules/lead-discovery';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
 import { ThrottleServiceAdapter, KillSwitchAdapter } from './wiring/outreach-email-adapters';
@@ -59,6 +60,8 @@ class HealthController {
     DashboardModule,
     // §5.5 — order/payment sync, the shared base M5/M6/M7/M8 read from.
     SyncModule,
+    // M0 (§5.0) — finds businesses not on any list; output is a review queue, never a Dealer.
+    LeadDiscoveryModule,
   ],
   controllers: [HealthController],
   providers: [

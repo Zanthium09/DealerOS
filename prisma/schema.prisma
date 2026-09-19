@@ -117,6 +117,8 @@ model Organization {
   orderLineItems      OrderLineItem[]
   paymentLedger       PaymentLedgerEntry[]
   syncBatches         SyncBatch[]
+  discoveryRuns       DiscoveryRun[]
+  leadCandidates      LeadCandidate[]
 }
 
 model User {
@@ -678,7 +680,10 @@ model OutreachSettings {
    */
   minSendIntervalMs Int     @default(500)
 
-  emailPaused Boolean @default(false)
+  emailPaused     Boolean @default(false)
+  // §12.6 for M0: one switch pauses every discovery run for this org. Crawling is
+  // outward-facing — if the User-Agent is annoying someone, the answer is a pause, not a deploy.
+  discoveryPaused Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -825,4 +830,105 @@ model SyncBatch {
   organization Organization @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId, kind, finishedAt])
+}
+
+// ---------------------------------------------------------------------------
+// M0 — lead discovery (§5.0). Finds businesses not on any list yet. Output is a
+// LeadCandidate in a review queue — NEVER a Dealer directly.
+// ---------------------------------------------------------------------------
+
+enum DiscoveryMethod {
+  PLACES_API
+  REGISTRY
+  URL_EXTRACT
+  FILE_EXTRACT
+}
+
+enum DiscoveryRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  // An OUTCOME, not an error: the system declined to fetch. See RefusalReason.
+  REFUSED
+}
+
+enum RefusalReason {
+  ROBOTS_DISALLOWED
+  BLOCKLISTED_DOMAIN
+  LOGIN_WALL
+  BLOCKED_BY_SITE
+  // Not in the design doc's list: fetching a private/loopback address from the server
+  // is SSRF, refused before any request leaves.
+  NON_PUBLIC_ADDRESS
+}
+
+enum LeadDedupeStatus {
+  UNIQUE
+  POSSIBLE_DUPLICATE
+  CONFIRMED_DUPLICATE
+}
+
+enum LeadStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DUPLICATE
+}
+
+model DiscoveryRun {
+  id                String             @id @default(cuid())
+  organizationId    String
+  method            DiscoveryMethod
+  query             Json               @default("{}")
+  status            DiscoveryRunStatus @default(RUNNING)
+  refusalReason     RefusalReason?
+  resultCount       Int                @default(0)
+  costPaise         Int                @default(0)
+  triggeredByUserId String?
+  startedAt         DateTime           @default(now())
+  finishedAt        DateTime?
+  error             String?
+  // What actually came back, kept so a human can see why a run found nothing (a JS-only
+  // page, a page with no listings). Capped by the service — not a shadow copy of a site.
+  rawExcerpt        String?
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  candidates   LeadCandidate[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, startedAt])
+}
+
+model LeadCandidate {
+  id                String           @id @default(cuid())
+  organizationId    String
+  discoveryRunId    String
+  businessName      String
+  contactPersonName String?
+  rawPhones         String[]         @default([])
+  rawEmails         String[]         @default([])
+  address           String?
+  city              String?
+  state             String?
+  category          String?
+  // Provenance. Never null (§16.2): "where did we get this person's number" must always
+  // have an answer, because most dealers are sole proprietors and the business phone is
+  // the owner's personal mobile (DPDP).
+  sourceUrl         String
+  capturedAt        DateTime
+  rawPayload        Json             @default("{}")
+  dedupeStatus      LeadDedupeStatus @default(UNIQUE)
+  matchedDealerId   String?
+  matchScore        Float?
+  status            LeadStatus       @default(PENDING)
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  promotedDealerId  String?
+  createdAt         DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  run          DiscoveryRun @relation(fields: [organizationId, discoveryRunId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([organizationId, status])
+  @@index([organizationId, discoveryRunId])
 }
