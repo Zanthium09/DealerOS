@@ -5,7 +5,7 @@ import { PRISMA } from '../../core/tenancy/tenancy.module';
 import { getOrgId } from '../../core/tenancy/tenancy';
 import { currentConsentState, writeConsent } from '../outreach-email/consent';
 import { transitionPipelineStage } from '../outreach-email/pipeline';
-import { Candidate, interactionStatusFor, rank, reasonFor, recentlyCalled, stepsFor } from './rules';
+import { Candidate, SPOKE, interactionStatusFor, rank, reasonFor, recentlyCalled, stepsFor } from './rules';
 
 export type LogCallInput = {
   dealerId: string;
@@ -81,6 +81,12 @@ export class CallService {
       data: { followUpDone: true },
     });
 
+    // Reaching the dealer answers an M7 overdue-balance flag (§5.8): quiet it for the
+    // reminder interval. An unanswered call leaves the flag up — nobody has spoken yet.
+    if (SPOKE(input.outcome)) {
+      await this.prisma.collectionCase.updateMany({ where: { dealerId: dealer.id, needsCall: true }, data: { needsCall: false, handledAt: new Date() } });
+    }
+
     for (const step of stepsFor(input.outcome)) {
       await transitionPipelineStage(this.prisma, this.audit, {
         organizationId: orgId,
@@ -129,7 +135,7 @@ export class CallService {
   async queue(now: Date = new Date()) {
     const since14 = new Date(now.getTime() - 14 * DAY);
 
-    const [followUps, interested, recentInbound, callConsent] = await Promise.all([
+    const [followUps, interested, recentInbound, callConsent, collections] = await Promise.all([
       this.prisma.callLog.findMany({ where: { followUpAt: { lte: now }, followUpDone: false }, select: { dealerId: true, followUpAt: true } }),
       this.prisma.dealer.findMany({ where: { pipelineStage: 'INTERESTED' }, select: { id: true } }),
       this.prisma.interactionEvent.findMany({
@@ -138,10 +144,12 @@ export class CallService {
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.consentLog.findMany({ where: { channel: 'CALL' }, orderBy: { createdAt: 'desc' }, distinct: ['dealerId'] }),
+      this.prisma.collectionCase.findMany({ where: { needsCall: true }, select: { dealerId: true, callReason: true } }),
     ]);
+    const collectionsReason = new Map(collections.map((c) => [c.dealerId, c.callReason ?? 'balance overdue']));
 
     const doNotCall = new Set(callConsent.filter((c) => c.state === 'OPTED_OUT').map((c) => c.dealerId));
-    const ids = [...new Set([...followUps.map((f) => f.dealerId), ...interested.map((d) => d.id), ...recentInbound.map((e) => e.dealerId)])].filter(
+    const ids = [...new Set([...followUps.map((f) => f.dealerId), ...interested.map((d) => d.id), ...collections.map((c) => c.dealerId), ...recentInbound.map((e) => e.dealerId)])].filter(
       (id) => !doNotCall.has(id),
     );
     if (ids.length === 0) return [];
@@ -173,6 +181,7 @@ export class CallService {
         followUpDue: followUpDue.get(d.id) ?? null,
         lastInboundAt: lastInbound.get(d.id) ?? null,
         lastCalledAt: lastCalled.get(d.id) ?? null,
+        collectionsReason: collectionsReason.get(d.id) ?? null,
       }))
       .filter((c) => !recentlyCalled(c, now));
 

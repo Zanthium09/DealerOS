@@ -17,7 +17,7 @@ export const SOURCE_MODULE = 'outreach-email';
  * suppression, the throttle and the kill switch cannot drift apart per module. Add a
  * module here when it starts sending email; a module not on this list cannot.
  */
-export const EMAIL_SENDING_MODULES: string[] = [SOURCE_MODULE, 'dormancy'];
+export const EMAIL_SENDING_MODULES: string[] = [SOURCE_MODULE, 'dormancy', 'collections'];
 
 export class EmailSendError extends Error {}
 

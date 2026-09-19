@@ -45,19 +45,23 @@ export type Candidate = {
   followUpDue: Date | null;
   lastInboundAt: Date | null;
   lastCalledAt: Date | null;
+  /** Set by M7 when a dealer's overdue balance has reached the final rung — a call, not a message (§5.8). */
+  collectionsReason?: string | null;
 };
 
-/** Lower = sooner. A promise to call back beats everything; then dealers already
- *  interested; then anyone who has just written to us. */
+/** Lower = sooner. A promise to call back beats everything; then overdue balances M7 has
+ *  escalated to a person; then dealers already interested; then anyone who has just written. */
 export function priorityOf(c: Candidate, now: Date = new Date()): number {
   if (c.followUpDue && c.followUpDue <= now) return 0;
-  if (c.stage === 'INTERESTED') return 1;
-  if (c.lastInboundAt) return 2;
-  return 3;
+  if (c.collectionsReason) return 1;
+  if (c.stage === 'INTERESTED') return 2;
+  if (c.lastInboundAt) return 3;
+  return 4;
 }
 
 export function reasonFor(c: Candidate, now: Date = new Date()): string {
   if (c.followUpDue && c.followUpDue <= now) return 'Call-back promised';
+  if (c.collectionsReason) return `Overdue payment — ${c.collectionsReason}`;
   if (c.stage === 'INTERESTED') return 'Interested — not yet onboarded';
   if (c.lastInboundAt) return 'Recently wrote to us';
   return 'Warm contact';

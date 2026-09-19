@@ -40,13 +40,21 @@ describe('call queue ordering', () => {
 
   test('a promised call-back outranks everything, then interested dealers, then fresh inbound', () => {
     assert.equal(priorityOf(c({ followUpDue: new Date('2026-09-09T00:00:00Z') }), now), 0);
-    assert.equal(priorityOf(c({ stage: 'INTERESTED' }), now), 1);
-    assert.equal(priorityOf(c({ lastInboundAt: new Date('2026-09-09T00:00:00Z') }), now), 2);
-    assert.equal(priorityOf(c({}), now), 3);
+    assert.equal(priorityOf(c({ collectionsReason: '95 days overdue' }), now), 1);
+    assert.equal(priorityOf(c({ stage: 'INTERESTED' }), now), 2);
+    assert.equal(priorityOf(c({ lastInboundAt: new Date('2026-09-09T00:00:00Z') }), now), 3);
+    assert.equal(priorityOf(c({}), now), 4);
+  });
+
+  test('an escalated overdue balance outranks interest but not a promised call-back', () => {
+    const due = c({ dealerId: 'due', collectionsReason: 'x' });
+    const interested = c({ dealerId: 'int', stage: 'INTERESTED' });
+    const promised = c({ dealerId: 'cb', followUpDue: new Date('2026-09-09T00:00:00Z') });
+    assert.deepEqual(rank([interested, due, promised], now).map((x) => x.dealerId), ['cb', 'due', 'int']);
   });
 
   test('a follow-up not yet due does not jump the queue', () => {
-    assert.equal(priorityOf(c({ followUpDue: new Date('2026-09-11T00:00:00Z') }), now), 3);
+    assert.equal(priorityOf(c({ followUpDue: new Date('2026-09-11T00:00:00Z') }), now), 4);
   });
 
   test('within a tier, the most recent inbound goes first', () => {

@@ -124,6 +124,8 @@ model Organization {
   whatsappConversations WhatsAppConversation[]
   callLogs              CallLog[]
   dormancySettings      DormancySettings?
+  collectionsSettings   CollectionsSettings?
+  collectionCases       CollectionCase[]
 }
 
 model User {
@@ -208,6 +210,7 @@ model Dealer {
   paymentLedger        PaymentLedgerEntry[]
   whatsappConversation WhatsAppConversation?
   callLogs             CallLog[]
+  collectionCase       CollectionCase?
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -1105,4 +1108,68 @@ model DormancySettings {
   updatedAt             DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// M7 — collections (§5.8). The escalation ladder (gentle → firm → a person's call) is a
+// deterministic state machine driven by days overdue, never an AI decision (§1.5). The AI
+// writes only wording; every figure is injected from the ledger (§1.4).
+// ---------------------------------------------------------------------------
+
+enum EscalationLevel {
+  NONE
+  GENTLE
+  FIRM
+  // The final rung: a person calls. Never automated (§5.8).
+  HUMAN
+}
+
+model CollectionsSettings {
+  id                   String    @id @default(cuid())
+  organizationId       String    @unique
+  // Off until the owner turns it on — nothing should start chasing dealers for money
+  // because a migration ran.
+  enabled              Boolean   @default(false)
+  // Days overdue at which each rung starts. Must be strictly increasing.
+  gentleAfterDays      Int       @default(3)
+  firmAfterDays        Int       @default(30)
+  humanAfterDays       Int       @default(60)
+  // At the same level, no more than one reminder per this many days.
+  reminderIntervalDays Int       @default(7)
+  // §10.4: an invoice last seen in a sync older than this is not chased — the ledger may
+  // have moved on (paid, credited) since. Stale data must never produce a payment demand.
+  freshnessWindowHours Int       @default(72)
+  lastRunAt            DateTime?
+  lastRunSummary       Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+// One row per dealer being chased: where they are on the ladder and what happened last.
+model CollectionCase {
+  id                String           @id @default(cuid())
+  organizationId    String
+  dealerId          String
+  level             EscalationLevel  @default(NONE)
+  oldestDaysOverdue Int              @default(0)
+  outstanding       Decimal          @default(0) @db.Decimal(14, 2)
+  overdueInvoices   Int              @default(0)
+  lastReminderAt    DateTime?
+  lastReminderLevel EscalationLevel?
+  // A person should call. Feeds the call queue (M4).
+  needsCall         Boolean          @default(false)
+  callReason        String?
+  // When a person last reached them about this — re-flagging waits out the interval.
+  handledAt         DateTime?
+  updatedAt         DateTime         @updatedAt
+  createdAt         DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([organizationId, dealerId])
+  @@index([organizationId, level])
+  @@index([organizationId, needsCall])
 }

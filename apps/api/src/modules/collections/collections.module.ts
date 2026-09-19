@@ -1,45 +1,43 @@
 import { Inject, Module, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { ConnectionOptions } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
+import { ApprovalModule } from '../../core/approval';
 import { AuditModule } from '../../core/audit';
 import { DraftingModule } from '../../core/drafting';
 import { startDailyOrgJob } from '../../core/scheduling/daily-org-job';
 import { OutreachEmailModule } from '../outreach-email/outreach-email.module';
-import { DormancyController } from './dormancy.controller';
-import { DormancyService } from './dormancy.service';
+import { SyncModule } from '../sync';
+import { CollectionsController } from './collections.controller';
+import { CollectionsService } from './collections.service';
 
-const CONNECTION = 'DORMANCY_REDIS_CONNECTION';
+const CONNECTION = 'COLLECTIONS_REDIS_CONNECTION';
 
-/**
- * M5 (§5.6). The scan runs once a day, at 02:30 IST — after the day's exports have
- * typically been imported and before staff are in — for every organization that has
- * switched dormancy on. See core/scheduling/daily-org-job.ts for how.
- */
+/** M7 (§5.8). Daily at 03:15 IST, after the dormancy scan, for every org that switched it on. */
 @Module({
-  imports: [AuditModule, DraftingModule, OutreachEmailModule],
-  controllers: [DormancyController],
+  imports: [AuditModule, ApprovalModule, DraftingModule, OutreachEmailModule, SyncModule],
+  controllers: [CollectionsController],
   providers: [
-    DormancyService,
+    CollectionsService,
     { provide: CONNECTION, useFactory: (): ConnectionOptions => ({ url: process.env.REDIS_URL ?? 'redis://localhost:6380', maxRetriesPerRequest: null }) },
   ],
-  exports: [DormancyService],
+  exports: [CollectionsService],
 })
-export class DormancyModule implements OnApplicationBootstrap, OnModuleDestroy {
+export class CollectionsModule implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly rawPrisma = new PrismaClient();
   private job?: { stop: () => Promise<void> };
 
   constructor(
-    private readonly dormancy: DormancyService,
+    private readonly collections: CollectionsService,
     @Inject(CONNECTION) private readonly connection: ConnectionOptions,
   ) {}
 
   onApplicationBootstrap(): void {
     this.job = startDailyOrgJob({
-      name: 'dormancy-scan',
-      pattern: '30 2 * * *',
+      name: 'collections-run',
+      pattern: '15 3 * * *',
       connection: this.connection,
-      listOrgIds: async () => (await this.rawPrisma.dormancySettings.findMany({ where: { enabled: true }, select: { organizationId: true } })).map((r) => r.organizationId),
-      run: () => this.dormancy.scan(),
+      listOrgIds: async () => (await this.rawPrisma.collectionsSettings.findMany({ where: { enabled: true }, select: { organizationId: true } })).map((r) => r.organizationId),
+      run: () => this.collections.run(),
     });
   }
 

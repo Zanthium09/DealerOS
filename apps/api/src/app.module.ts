@@ -18,6 +18,7 @@ import { LeadDiscoveryModule } from './modules/lead-discovery';
 import { OutreachWhatsAppModule } from './modules/outreach-whatsapp';
 import { CallingModule } from './modules/calling';
 import { DormancyModule, DORMANCY_SOURCE_MODULE } from './modules/dormancy';
+import { CollectionsModule } from './modules/collections';
 import { WhatsAppProviderModule } from './providers/whatsapp';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
@@ -79,6 +80,7 @@ class HealthController {
     CallingModule,
     // M5 (§5.6) — dormancy scan, nudges and reactivation tracking.
     DormancyModule,
+    CollectionsModule,
   ],
   controllers: [HealthController],
   providers: [
