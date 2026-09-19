@@ -22,6 +22,7 @@ import {
   Moon,
   Wallet,
   Tag,
+  Bot,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -56,6 +57,7 @@ const NAV = [
   { href: '/dormancy', label: 'Dormant Dealers', icon: Moon },
   { href: '/collections', label: 'Collections', icon: Wallet },
   { href: '/schemes', label: 'Schemes', icon: Tag },
+  { href: '/ordering-bot', label: 'Ordering Bot', icon: Bot },
   { href: '/sync', label: 'Data Sync', icon: DatabaseZap },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/settings', label: 'Settings', icon: Settings },

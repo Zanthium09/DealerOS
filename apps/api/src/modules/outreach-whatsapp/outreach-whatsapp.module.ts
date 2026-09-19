@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../../core/audit';
 import { KillSwitchModule } from '../../core/killswitch';
 import { OutreachEmailModule } from '../outreach-email/outreach-email.module';
+import { InboundBotRegistry } from './inbound-bot.registry';
 import { WhatsAppDashboardController } from './whatsapp-dashboard.controller';
 import { WhatsAppDraftService } from './whatsapp-draft.service';
 import { WhatsAppInboundService } from './whatsapp-inbound.service';
@@ -17,7 +18,7 @@ import { WhatsAppTemplateService } from './template.service';
 @Module({
   imports: [AuditModule, KillSwitchModule, OutreachEmailModule],
   controllers: [WhatsAppWebhookController, WhatsAppDashboardController],
-  providers: [WhatsAppTemplateService, WhatsAppSendService, WhatsAppDraftService, WhatsAppInboundService],
-  exports: [WhatsAppSendService, WhatsAppTemplateService, WhatsAppDraftService],
+  providers: [WhatsAppTemplateService, WhatsAppSendService, WhatsAppDraftService, WhatsAppInboundService, InboundBotRegistry],
+  exports: [WhatsAppSendService, WhatsAppTemplateService, WhatsAppDraftService, InboundBotRegistry],
 })
 export class OutreachWhatsAppModule {}

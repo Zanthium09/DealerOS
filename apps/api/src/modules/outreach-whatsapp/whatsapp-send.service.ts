@@ -16,7 +16,7 @@ export class WhatsAppSendError extends Error {}
  *  so "what exactly did we send, and how" is answerable from the row alone. */
 export type WhatsAppDraftPayload =
   | { kind: 'template'; templateId: string; params: string[] }
-  | { kind: 'freeform'; human?: true };
+  | { kind: 'freeform'; human?: true; bot?: true };
 
 /**
  * §5.3 / §7 — takes an APPROVED WhatsApp draft and sends it. Every rule here is a hard

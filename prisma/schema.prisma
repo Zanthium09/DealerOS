@@ -128,6 +128,9 @@ model Organization {
   collectionCases       CollectionCase[]
   schemes               Scheme[]
   schemeRecipients      SchemeRecipient[]
+  orderingBotSettings   OrderingBotSettings?
+  orderingBotPilots     OrderingBotPilot[]
+  botOrderDrafts        BotOrderDraft[]
 }
 
 model User {
@@ -214,6 +217,8 @@ model Dealer {
   callLogs             CallLog[]
   collectionCase       CollectionCase?
   schemeRecipients     SchemeRecipient[]
+  orderingBotPilot     OrderingBotPilot?
+  botOrderDrafts       BotOrderDraft[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -1235,4 +1240,64 @@ model SchemeRecipient {
 
   @@unique([schemeId, dealerId])
   @@index([organizationId, dealerId])
+}
+
+// ---- M8 ordering bot (§5.9) ------------------------------------------------------------
+// A scripted, deterministic conversation — no model anywhere in it — that lets a dealer
+// build an order over WhatsApp. It is a PILOT (§16.3): only enrolled dealers, capped.
+
+enum BotDraftStatus {
+  OPEN
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+model OrderingBotSettings {
+  id                 String   @id @default(cuid())
+  organizationId     String   @unique
+  // Off until the owner switches it on.
+  enabled            Boolean  @default(false)
+  // §5.9 scopes this as a pilot with 20-30 comfortable dealers.
+  pilotLimit         Int      @default(30)
+  // A line above this is not added: a misparsed extra zero must not become an order.
+  maxLineQuantity    Int      @default(500)
+  // An unconfirmed order lapses; a dealer confirming yesterday's list today is a risk.
+  draftExpiryMinutes Int      @default(120)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+model OrderingBotPilot {
+  id             String   @id @default(cuid())
+  organizationId String
+  dealerId       String
+  enrolledAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([organizationId, dealerId])
+}
+
+// The order being built in the chat. Becomes an Order ONLY on the dealer's explicit
+// CONFIRM — the guard against a misparsed quantity becoming a real order.
+model BotOrderDraft {
+  id             String         @id @default(cuid())
+  organizationId String
+  dealerId       String
+  status         BotDraftStatus @default(OPEN)
+  // [{ sku, productName, quantity, unitPrice }] — prices are Product.unitPrice at build time
+  lines          Json
+  expiresAt      DateTime
+  orderId        String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([organizationId, dealerId, status])
 }

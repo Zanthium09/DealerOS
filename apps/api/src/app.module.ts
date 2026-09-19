@@ -15,11 +15,12 @@ import { OutreachEmailModule } from './modules/outreach-email/outreach-email.mod
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SyncModule } from './modules/sync';
 import { LeadDiscoveryModule } from './modules/lead-discovery';
-import { OutreachWhatsAppModule } from './modules/outreach-whatsapp';
+import { OutreachWhatsAppModule, WHATSAPP_SOURCE_MODULE } from './modules/outreach-whatsapp';
 import { CallingModule } from './modules/calling';
 import { DormancyModule, DORMANCY_SOURCE_MODULE } from './modules/dormancy';
 import { CollectionsModule } from './modules/collections';
 import { SchemesModule } from './modules/schemes';
+import { OrderingBotModule, ORDERING_BOT_RULE_ID } from './modules/ordering-bot';
 import { WhatsAppProviderModule } from './providers/whatsapp';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
@@ -57,6 +58,10 @@ class HealthController {
       // only when the dealer's average order value is under the org's threshold, which
       // DormancyService applies on top (no threshold set = every nudge waits for a person).
       { id: 'dormancy-nudge-no-money', sourceModule: DORMANCY_SOURCE_MODULE },
+      // §5.9: the ordering bot's replies are scripted, not model-written — deterministic
+      // rules committing (§1.5). They carry the dealer's own order and DB prices, and go
+      // through the same guarded WhatsApp send as any other message.
+      { id: ORDERING_BOT_RULE_ID, sourceModule: WHATSAPP_SOURCE_MODULE },
     ]),
     // M1 (§5.1). M0 will call its dedup service rather than reimplementing it.
     ContactsModule,
@@ -83,6 +88,7 @@ class HealthController {
     DormancyModule,
     CollectionsModule,
     SchemesModule,
+    OrderingBotModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -4,6 +4,7 @@
 //
 // Phone numbers are +1555… on purpose: outside production the staging guard (§12.7)
 // refuses anything that is not a recognised test destination.
+import { InboundBotRegistry } from '../../src/modules/outreach-whatsapp/inbound-bot.registry';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
@@ -24,7 +25,7 @@ const sequenceCancelled: string[] = [];
 const sequence = { cancel: async (_o: string, d: string) => void sequenceCancelled.push(d) } as never;
 
 const sender = new WhatsAppSendService(db, fake, killSwitch);
-const inbound = new WhatsAppInboundService(db, fake, new AuditService(db), sequence);
+const inbound = new WhatsAppInboundService(db, fake, new AuditService(db), sequence, new InboundBotRegistry());
 const templates = new WhatsAppTemplateService(db, fake);
 const drafts = new WhatsAppDraftService(db, templates, sender);
 
@@ -354,7 +355,7 @@ describe('inbound webhook (§5.3, §8)', () => {
       cancel: async () => {
         if (fail) throw new Error('transient failure');
       },
-    } as never);
+    } as never, new InboundBotRegistry());
     const body = payload([msg('wamid.retry', 'do you have a catalogue', '15555559005')]);
 
     await assert.rejects(() => deliver(body, flaky), /transient failure/);

@@ -8,6 +8,7 @@ import { normalizePhone } from '../contacts/normalize';
 import { currentConsentState, writeConsent } from '../outreach-email/consent';
 import { transitionPipelineStage } from '../outreach-email/pipeline';
 import { SequenceService } from '../outreach-email/sequence.service';
+import { InboundBotRegistry } from './inbound-bot.registry';
 import { classifyIntent, fromWaId, isPositiveIntent, nextConversation, sessionExpiryFrom } from './rules';
 
 type ByPhoneNumber = { phoneNumberId: string };
@@ -35,6 +36,7 @@ export class WhatsAppInboundService {
     @Inject(WHATSAPP_PROVIDER) private readonly whatsapp: WhatsAppProvider,
     private readonly audit: AuditService,
     private readonly sequence: SequenceService,
+    private readonly bots: InboundBotRegistry,
   ) {}
 
   /** Throws (→ 4xx, no retry wanted) if the signature does not verify; per-event failures
@@ -208,6 +210,19 @@ export class WhatsAppInboundService {
       if (isPositiveIntent(intent)) {
         await transitionPipelineStage(this.prisma, this.audit, {
           organizationId: orgId, dealerId, from: 'CONTACTED', to: 'INTERESTED', reason: `WhatsApp ${intent.toLowerCase()} signal (§5.3)`,
+        });
+      }
+    }
+
+    // An enrolled ordering-bot dealer (M8) gets a scripted reply. Runs last, after the
+    // window and consent are recorded, because the reply goes out through the same guards.
+    // Whatever the bot handled is not the human inbox's to chase — unless it asked for one.
+    if (intent !== 'STOP') {
+      const result = await this.bots.dispatch({ dealerId, text: e.text });
+      if (result.handled) {
+        await this.prisma.whatsAppConversation.updateMany({
+          where: { dealerId },
+          data: { needsHuman: result.needsHuman === true, humanReason: result.needsHuman ? result.reason ?? 'Asked for a person' : null, state: result.needsHuman ? 'HUMAN' : 'IDLE' },
         });
       }
     }
