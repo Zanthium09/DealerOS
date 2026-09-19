@@ -95,30 +95,33 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users               User[]
-  dealers             Dealer[]
-  consentLogs         ConsentLog[]
-  auditEvents         AuditEvent[]
-  dealerPhones        DealerPhone[]
-  dealerEmails        DealerEmail[]
-  messageDrafts       MessageDraft[]
-  importBatches       ImportBatch[]
-  duplicateCandidates DuplicateCandidate[]
-  dealerMerges        DealerMerge[]
-  interactionEvents   InteractionEvent[]
-  sendingIdentities   SendingIdentity[]
-  suppressions        Suppression[]
-  campaigns           Campaign[]
-  outreachSchedules   OutreachSchedule[]
-  outreachTemplates   OutreachTemplate[]
-  outreachSettings    OutreachSettings?
-  products            Product[]
-  orders              Order[]
-  orderLineItems      OrderLineItem[]
-  paymentLedger       PaymentLedgerEntry[]
-  syncBatches         SyncBatch[]
-  discoveryRuns       DiscoveryRun[]
-  leadCandidates      LeadCandidate[]
+  users                 User[]
+  dealers               Dealer[]
+  consentLogs           ConsentLog[]
+  auditEvents           AuditEvent[]
+  dealerPhones          DealerPhone[]
+  dealerEmails          DealerEmail[]
+  messageDrafts         MessageDraft[]
+  importBatches         ImportBatch[]
+  duplicateCandidates   DuplicateCandidate[]
+  dealerMerges          DealerMerge[]
+  interactionEvents     InteractionEvent[]
+  sendingIdentities     SendingIdentity[]
+  suppressions          Suppression[]
+  campaigns             Campaign[]
+  outreachSchedules     OutreachSchedule[]
+  outreachTemplates     OutreachTemplate[]
+  outreachSettings      OutreachSettings?
+  products              Product[]
+  orders                Order[]
+  orderLineItems        OrderLineItem[]
+  paymentLedger         PaymentLedgerEntry[]
+  syncBatches           SyncBatch[]
+  discoveryRuns         DiscoveryRun[]
+  leadCandidates        LeadCandidate[]
+  whatsappAccount       WhatsAppAccount?
+  whatsappTemplates     WhatsAppTemplate[]
+  whatsappConversations WhatsAppConversation[]
 }
 
 model User {
@@ -187,20 +190,21 @@ model Dealer {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  organization        Organization         @relation(fields: [organizationId], references: [id])
+  organization         Organization          @relation(fields: [organizationId], references: [id])
   // Composite on purpose (§1.3): a salesman can only ever be a user of THIS dealer's
   // org, enforced by the foreign key, not by remembering to filter.
-  assignedSalesman    User?                @relation("AssignedSalesman", fields: [organizationId, assignedSalesmanId], references: [organizationId, id], onUpdate: Restrict)
-  consentLogs         ConsentLog[]
-  phones              DealerPhone[]
-  emails              DealerEmail[]
-  messageDrafts       MessageDraft[]
-  duplicateCandidates DuplicateCandidate[]
-  mergesAsSurvivor    DealerMerge[]        @relation("MergeSurvivor")
-  mergesAsMerged      DealerMerge[]        @relation("MergeMerged")
-  interactionEvents   InteractionEvent[]
-  orders              Order[]
-  paymentLedger       PaymentLedgerEntry[]
+  assignedSalesman     User?                 @relation("AssignedSalesman", fields: [organizationId, assignedSalesmanId], references: [organizationId, id], onUpdate: Restrict)
+  consentLogs          ConsentLog[]
+  phones               DealerPhone[]
+  emails               DealerEmail[]
+  messageDrafts        MessageDraft[]
+  duplicateCandidates  DuplicateCandidate[]
+  mergesAsSurvivor     DealerMerge[]         @relation("MergeSurvivor")
+  mergesAsMerged       DealerMerge[]         @relation("MergeMerged")
+  interactionEvents    InteractionEvent[]
+  orders               Order[]
+  paymentLedger        PaymentLedgerEntry[]
+  whatsappConversation WhatsAppConversation?
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -680,10 +684,14 @@ model OutreachSettings {
    */
   minSendIntervalMs Int     @default(500)
 
-  emailPaused     Boolean @default(false)
+  emailPaused        Boolean @default(false)
   // §12.6 for M0: one switch pauses every discovery run for this org. Crawling is
   // outward-facing — if the User-Agent is annoying someone, the answer is a pause, not a deploy.
-  discoveryPaused Boolean @default(false)
+  discoveryPaused    Boolean @default(false)
+  // §12.6 for WhatsApp: pauses every outbound WhatsApp message for this org.
+  whatsappPaused     Boolean @default(false)
+  // Meta enforces its own tiered limits; this is OUR ceiling under them. 0 = unlimited.
+  whatsappDailyLimit Int     @default(250)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -931,4 +939,103 @@ model LeadCandidate {
 
   @@index([organizationId, status])
   @@index([organizationId, discoveryRunId])
+}
+
+// ---------------------------------------------------------------------------
+// M3 — WhatsApp (§5.3, §7). Official Meta Cloud API only (§1.1). Warm channel only
+// (§1.2): a dealer enters WhatsApp outreach only after real engagement.
+// ---------------------------------------------------------------------------
+
+enum WhatsAppTemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+enum WhatsAppTemplateStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  PAUSED
+  DISABLED
+}
+
+// Deterministic conversation state (§5.3) — a state machine, never a model decision.
+enum ConversationState {
+  IDLE
+  CATALOG
+  PRICING
+  NEGOTIATION
+  NOT_INTERESTED
+  HUMAN
+}
+
+// One row per organization: which WhatsApp Business number is theirs. This is what an
+// inbound webhook is routed by — it arrives carrying only the business phone-number id,
+// so the org has to be discovered from it before any tenant context exists.
+model WhatsAppAccount {
+  id                        String   @id @default(cuid())
+  organizationId            String   @unique
+  phoneNumberId             String   @unique
+  wabaId                    String   @unique
+  displayPhone              String?
+  // Last quality signal Meta sent (FLAGGED / DOWNGRADE / UPGRADE / ONBOARDING) and the
+  // messaging tier it reported. Recorded, not interpreted, beyond the pause below.
+  qualityEvent              String?
+  messagingTier             String?
+  // §7: auto-paused on a quality drop. Stops BROADCASTS (marketing templates) only —
+  // replies inside a live session still go out. A human resumes it, never a timer.
+  broadcastsPausedByQuality Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+model WhatsAppTemplate {
+  id              String                   @id @default(cuid())
+  organizationId  String
+  // Meta's name rules: lowercase letters, digits, underscore.
+  name            String
+  language        String                   @default("en")
+  category        WhatsAppTemplateCategory
+  // Body with Meta-style {{1}} {{2}} placeholders. The template library IS the content
+  // (§5.3): there is no model-written WhatsApp text, so §1.4 reduces to substituting
+  // database values into approved wording.
+  bodyText        String
+  // Which dealer field feeds {{1}}, {{2}}… in order.
+  paramKeys       String[]                 @default([])
+  status          WhatsAppTemplateStatus   @default(DRAFT)
+  metaTemplateId  String?
+  rejectionReason String?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, name, language])
+  @@index([organizationId, status])
+}
+
+model WhatsAppConversation {
+  id               String            @id @default(cuid())
+  organizationId   String
+  dealerId         String
+  phoneE164        String
+  state            ConversationState @default(IDLE)
+  // §7: freeform is allowed only while this is in the future — 24h from the dealer's
+  // last inbound message. Outside it, only an approved template may go out.
+  sessionExpiresAt DateTime?
+  lastInboundAt    DateTime?
+  needsHuman       Boolean           @default(false)
+  humanReason      String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([organizationId, dealerId])
+  @@index([organizationId, needsHuman])
 }

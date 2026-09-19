@@ -57,10 +57,11 @@ export class ColdDraftService {
           bodyHtml: active.bodyHtml ? renderPlain(active.bodyHtml, variables) : null,
           templateVariables: variables,
           containsFinancialTerms: false,
-          // No model involved, so nothing to review for invention. Still routed by
-          // the same auto-send rules as everything else via requiresApproval=false.
-          requiresApproval: false,
-          autoSendRuleId: 'verbatim-template',
+          // No model involved, so nothing to review for invention — but no auto-send RULE
+          // covers it either: ApprovalService.autoSend only honours a configured rule for
+          // this module, and an invented id here made every auto-send attempt fail with
+          // "needs a human". It goes to the queue, where a person sees the text.
+          requiresApproval: true,
         } as never,
       });
     }

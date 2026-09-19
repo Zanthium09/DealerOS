@@ -15,6 +15,8 @@ import { OutreachEmailModule } from './modules/outreach-email/outreach-email.mod
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SyncModule } from './modules/sync';
 import { LeadDiscoveryModule } from './modules/lead-discovery';
+import { OutreachWhatsAppModule } from './modules/outreach-whatsapp';
+import { WhatsAppProviderModule } from './providers/whatsapp';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
 import { ThrottleServiceAdapter, KillSwitchAdapter } from './wiring/outreach-email-adapters';
@@ -62,6 +64,9 @@ class HealthController {
     SyncModule,
     // M0 (§5.0) — finds businesses not on any list; output is a review queue, never a Dealer.
     LeadDiscoveryModule,
+    // M3 (§5.3) — the warm channel. Official Meta Cloud API only (§1.1).
+    WhatsAppProviderModule,
+    OutreachWhatsAppModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -342,6 +342,7 @@ export class OutreachEmailDashboardController {
    */
   @Post('compose')
   async compose(
+    @CurrentTenantSession() session: TenantSession,
     @Body()
     body: {
       dealerId?: unknown;
@@ -367,7 +368,7 @@ export class OutreachEmailDashboardController {
     });
 
     if (body.sendNow !== true) return { draftId: draft.id, sent: false };
-    return this.decideAndSend(draft.id, () => this.approval.autoSend(draft.id));
+    return this.decideAndSend(draft.id, () => this.approval.approve(draft.id, session.userId));
   }
 
   @Get('sending-identities')

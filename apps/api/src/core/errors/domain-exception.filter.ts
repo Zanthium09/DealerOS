@@ -14,6 +14,8 @@ import { EmailProviderError } from '../../providers/email/email.provider';
 import { EmailSendError } from '../../modules/outreach-email/send.service';
 import { InboundEmailError } from '../../modules/outreach-email/inbound.service';
 import { UnsubscribeError } from '../../modules/outreach-email/unsubscribe-endpoint.service';
+import { WhatsAppSendError } from '../../modules/outreach-whatsapp/whatsapp-send.service';
+import { WhatsAppProviderError } from '../../providers/whatsapp/whatsapp.provider';
 
 /**
  * Every domain error in this app was a plain `extends Error`, and Nest's default
@@ -35,6 +37,7 @@ const STATUS_BY_ERROR: [new (...args: never[]) => Error, HttpStatus][] = [
   // The draft was already approved/rejected — a conflicting state, not a bad request.
   [ApprovalError, HttpStatus.CONFLICT],
   [EmailSendError, HttpStatus.UNPROCESSABLE_ENTITY],
+  [WhatsAppSendError, HttpStatus.UNPROCESSABLE_ENTITY],
   [DraftingError, HttpStatus.UNPROCESSABLE_ENTITY],
   [UnsubscribeError, HttpStatus.BAD_REQUEST],
   [InboundEmailError, HttpStatus.BAD_REQUEST],
@@ -43,6 +46,7 @@ const STATUS_BY_ERROR: [new (...args: never[]) => Error, HttpStatus][] = [
   [StagingSendBlockedError, HttpStatus.FORBIDDEN],
   // Upstream said no. 502 keeps it honestly separate from our own bugs.
   [EmailProviderError, HttpStatus.BAD_GATEWAY],
+  [WhatsAppProviderError, HttpStatus.BAD_GATEWAY],
 ];
 
 /** Structural, so this file does not need @types/express (not a dependency here). */

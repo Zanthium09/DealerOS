@@ -142,10 +142,11 @@ export class CustomDraftService {
         bccEmails: input.bcc ?? [],
         templateVariables: { ...variables, composedByHuman: 'true' },
         containsFinancialTerms: false,
-        // Already authored and reviewed by the person sending it; the caller decides
-        // whether to dispatch immediately or leave it in the queue.
-        requiresApproval: false,
-        autoSendRuleId: 'human-composed',
+        // The person who wrote it is the approver: "Send now" approves it as that user
+        // (audited DRAFT_APPROVED, §9), "Save to queue" leaves it PENDING. There is no
+        // auto-send rule for a human-composed message and inventing one id here made
+        // Send-now always fail — ApprovalService.autoSend rejects an unconfigured rule.
+        requiresApproval: true,
       },
     });
   }
