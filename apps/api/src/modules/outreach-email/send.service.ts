@@ -11,6 +11,14 @@ import { assertSendAllowed } from '../../core/killswitch/staging-guard';
 
 export const SOURCE_MODULE = 'outreach-email';
 
+/**
+ * Every module whose drafts go out as email. Each keeps its OWN sourceModule — its own
+ * queue and its own auto-send rule (§9) — but they share this one sender, so consent,
+ * suppression, the throttle and the kill switch cannot drift apart per module. Add a
+ * module here when it starts sending email; a module not on this list cannot.
+ */
+export const EMAIL_SENDING_MODULES: string[] = [SOURCE_MODULE, 'dormancy'];
+
 export class EmailSendError extends Error {}
 
 export type EmailSendConfig = {
@@ -39,8 +47,8 @@ export class EmailSendService {
   async sendApprovedDraft(draftId: string): Promise<InteractionEvent> {
     const draft = await this.prisma.messageDraft.findFirst({ where: { id: draftId } });
     if (!draft) throw new EmailSendError(`no draft ${draftId} in this organization`);
-    if (draft.sourceModule !== SOURCE_MODULE) {
-      throw new EmailSendError(`draft ${draftId} belongs to ${draft.sourceModule}, not ${SOURCE_MODULE}`);
+    if (!EMAIL_SENDING_MODULES.includes(draft.sourceModule)) {
+      throw new EmailSendError(`draft ${draftId} belongs to ${draft.sourceModule}, which does not send email`);
     }
     if (draft.status !== 'APPROVED') {
       throw new EmailSendError(`draft ${draftId} is ${draft.status}, not APPROVED — it cannot be sent (§9)`);

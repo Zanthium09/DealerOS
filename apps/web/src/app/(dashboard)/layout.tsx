@@ -19,6 +19,7 @@ import {
   DatabaseZap,
   MessageCircle,
   Phone,
+  Moon,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -50,6 +51,7 @@ const NAV = [
   { href: '/replies', label: 'Replies', icon: Reply },
   { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/calling', label: 'Calling', icon: Phone },
+  { href: '/dormancy', label: 'Dormant Dealers', icon: Moon },
   { href: '/sync', label: 'Data Sync', icon: DatabaseZap },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/settings', label: 'Settings', icon: Settings },

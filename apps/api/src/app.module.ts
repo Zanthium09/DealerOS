@@ -17,6 +17,7 @@ import { SyncModule } from './modules/sync';
 import { LeadDiscoveryModule } from './modules/lead-discovery';
 import { OutreachWhatsAppModule } from './modules/outreach-whatsapp';
 import { CallingModule } from './modules/calling';
+import { DormancyModule, DORMANCY_SOURCE_MODULE } from './modules/dormancy';
 import { WhatsAppProviderModule } from './providers/whatsapp';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
@@ -48,7 +49,13 @@ class HealthController {
     // therefore needs a human, per forRoot()'s default when called with [].
     AiModule,
     DraftingModule,
-    ApprovalModule.forRoot([{ id: 'cold-email-no-money', sourceModule: OUTREACH_EMAIL_SOURCE_MODULE }]),
+    ApprovalModule.forRoot([
+      { id: 'cold-email-no-money', sourceModule: OUTREACH_EMAIL_SOURCE_MODULE },
+      // §5.6: a dormancy nudge carries no financial term, so it MAY skip the queue — but
+      // only when the dealer's average order value is under the org's threshold, which
+      // DormancyService applies on top (no threshold set = every nudge waits for a person).
+      { id: 'dormancy-nudge-no-money', sourceModule: DORMANCY_SOURCE_MODULE },
+    ]),
     // M1 (§5.1). M0 will call its dedup service rather than reimplementing it.
     ContactsModule,
     // §11 step 3: InteractionEvent + webhook ingestion, throttle, kill switch — all
@@ -70,6 +77,8 @@ class HealthController {
     OutreachWhatsAppModule,
     // M4 (§5.4) — human-initiated calling: a brief before, an outcome after. No dialer.
     CallingModule,
+    // M5 (§5.6) — dormancy scan, nudges and reactivation tracking.
+    DormancyModule,
   ],
   controllers: [HealthController],
   providers: [

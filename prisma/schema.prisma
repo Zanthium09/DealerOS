@@ -123,6 +123,7 @@ model Organization {
   whatsappTemplates     WhatsAppTemplate[]
   whatsappConversations WhatsAppConversation[]
   callLogs              CallLog[]
+  dormancySettings      DormancySettings?
 }
 
 model User {
@@ -1076,4 +1077,32 @@ model CallLog {
 
   @@index([organizationId, dealerId, calledAt])
   @@index([organizationId, followUpAt])
+}
+
+// ---------------------------------------------------------------------------
+// M5 — dormancy & reactivation (§5.6). Deterministic thresholds, not a model's call
+// (§1.5): ACTIVE → DORMANT after N days without an order; a new order closes the loop.
+// ---------------------------------------------------------------------------
+
+model DormancySettings {
+  id                    String    @id @default(cuid())
+  organizationId        String    @unique
+  // Off until the owner turns it on: nothing should start emailing dormant dealers because
+  // a migration ran.
+  enabled               Boolean   @default(false)
+  // §5.6: "no order in N days (configurable, default 30)".
+  thresholdDays         Int       @default(30)
+  // §5.6: a nudge auto-sends only when the dealer's average order value is BELOW this;
+  // null means every nudge waits for a person. A higher-value dealer's relationship is the
+  // one worth a human glance before anything goes out.
+  autoSendBelowAov      Decimal?  @db.Decimal(14, 2)
+  // A reactivation counts as "after our nudge" if the nudge went out within this many days
+  // before the order — the attribution the case study (§15) needs.
+  attributionWindowDays Int       @default(30)
+  lastScanAt            DateTime?
+  lastScanSummary       Json?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
 }
