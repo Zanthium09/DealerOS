@@ -122,6 +122,7 @@ model Organization {
   whatsappAccount       WhatsAppAccount?
   whatsappTemplates     WhatsAppTemplate[]
   whatsappConversations WhatsAppConversation[]
+  callLogs              CallLog[]
 }
 
 model User {
@@ -205,6 +206,7 @@ model Dealer {
   orders               Order[]
   paymentLedger        PaymentLedgerEntry[]
   whatsappConversation WhatsAppConversation?
+  callLogs             CallLog[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -1038,4 +1040,40 @@ model WhatsAppConversation {
 
   @@unique([organizationId, dealerId])
   @@index([organizationId, needsHuman])
+}
+
+// ---------------------------------------------------------------------------
+// M4 — calling (§5.4). Human-initiated: a person makes the call, the system compiles the
+// brief beforehand and records the outcome after. No dialer, no voice API (§17 Phase 4).
+// ---------------------------------------------------------------------------
+
+enum CallOutcome {
+  SPOKE_INTERESTED
+  SPOKE_CALL_BACK
+  SPOKE_NOT_INTERESTED
+  ONBOARDED
+  NO_ANSWER
+  WRONG_NUMBER
+  DO_NOT_CALL
+}
+
+model CallLog {
+  id              String      @id @default(cuid())
+  organizationId  String
+  dealerId        String
+  calledByUserId  String?
+  phoneE164       String?
+  outcome         CallOutcome
+  notes           String?
+  durationSeconds Int?
+  calledAt        DateTime    @default(now())
+  followUpAt      DateTime?
+  followUpDone    Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onUpdate: Restrict)
+
+  @@index([organizationId, dealerId, calledAt])
+  @@index([organizationId, followUpAt])
 }
