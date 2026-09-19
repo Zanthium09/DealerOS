@@ -112,6 +112,11 @@ model Organization {
   outreachSchedules   OutreachSchedule[]
   outreachTemplates   OutreachTemplate[]
   outreachSettings    OutreachSettings?
+  products            Product[]
+  orders              Order[]
+  orderLineItems      OrderLineItem[]
+  paymentLedger       PaymentLedgerEntry[]
+  syncBatches         SyncBatch[]
 }
 
 model User {
@@ -192,6 +197,8 @@ model Dealer {
   mergesAsSurvivor    DealerMerge[]        @relation("MergeSurvivor")
   mergesAsMerged      DealerMerge[]        @relation("MergeMerged")
   interactionEvents   InteractionEvent[]
+  orders              Order[]
+  paymentLedger       PaymentLedgerEntry[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -677,4 +684,145 @@ model OutreachSettings {
   updatedAt DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// Order & payment sync (§5.5) — shared infrastructure for M5/M6/M7/M8.
+// v1 is CSV/XLSX import regardless of the accounting system (§16.1).
+// ---------------------------------------------------------------------------
+
+enum OrderSource {
+  CSV_IMPORT
+  ORDERING_BOT
+  MANUAL
+  ACCOUNTING_SYNC
+}
+
+// Derived from days overdue, never hand-set (§5.8). CURRENT covers "not yet due" and
+// "under 30 days late"; D30/D60 are 30-59 / 60-89 days late; D90_PLUS is 90+.
+enum AgeingBucket {
+  CURRENT
+  D30
+  D60
+  D90_PLUS
+}
+
+enum SyncKind {
+  ORDERS
+  PAYMENTS
+  PRODUCTS
+}
+
+enum SyncStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  organizationId String
+  sku            String
+  name           String
+  category       String?
+  unitPrice      Decimal  @db.Decimal(14, 2)
+  imageUrl       String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, sku])
+  @@index([organizationId])
+}
+
+model Order {
+  id             String      @id @default(cuid())
+  organizationId String
+  dealerId       String
+  // The accounting system's own voucher/invoice number. What makes a re-import
+  // idempotent — the same file twice must not double a dealer's order history.
+  externalRef    String?
+  orderDate      DateTime
+  totalValue     Decimal     @db.Decimal(14, 2)
+  source         OrderSource
+  // FK added with the Scheme model (M6); attribution is written by a matching rule.
+  schemeId       String?
+  syncBatchId    String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  dealer       Dealer          @relation(fields: [organizationId, dealerId], references: [organizationId, id], onUpdate: Restrict)
+  lineItems    OrderLineItem[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, externalRef])
+  @@index([organizationId, dealerId, orderDate])
+  @@index([organizationId, orderDate])
+}
+
+model OrderLineItem {
+  id             String  @id @default(cuid())
+  organizationId String
+  orderId        String
+  sku            String
+  productName    String
+  quantity       Decimal @db.Decimal(14, 3)
+  unitPrice      Decimal @db.Decimal(14, 2)
+  lineTotal      Decimal @db.Decimal(14, 2)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  order        Order        @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([organizationId])
+  @@index([orderId])
+}
+
+model PaymentLedgerEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  dealerId       String
+  invoiceRef     String
+  amount         Decimal      @db.Decimal(14, 2)
+  dueDate        DateTime
+  paidAmount     Decimal      @default(0) @db.Decimal(14, 2)
+  paidDate       DateTime?
+  ageingBucket   AgeingBucket @default(CURRENT)
+  // Load-bearing (§10.4): collections refuses to send when this is stale.
+  lastSyncedAt   DateTime
+  syncBatchId    String?
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  dealer       Dealer       @relation(fields: [organizationId, dealerId], references: [organizationId, id], onUpdate: Restrict)
+
+  @@unique([organizationId, invoiceRef])
+  @@index([organizationId, dealerId])
+  @@index([organizationId, ageingBucket])
+}
+
+// One import run. The latest COMPLETED row per kind IS the "data freshness"
+// indicator (§14) — no separate freshness table to drift out of sync with it.
+model SyncBatch {
+  id              String     @id @default(cuid())
+  organizationId  String
+  kind            SyncKind
+  filename        String
+  status          SyncStatus @default(RUNNING)
+  rowCount        Int        @default(0)
+  createdCount    Int        @default(0)
+  updatedCount    Int        @default(0)
+  // Rows whose dealer could not be matched EXACTLY. Never fuzzy-matched: attaching an
+  // invoice to the wrong business corrupts two payment histories (§5.1's reasoning).
+  unmatchedCount  Int        @default(0)
+  invalidCount    Int        @default(0)
+  errors          Json       @default("[]")
+  createdByUserId String?
+  startedAt       DateTime   @default(now())
+  finishedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, kind, finishedAt])
 }

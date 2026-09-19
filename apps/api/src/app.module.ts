@@ -13,6 +13,7 @@ import { WebhooksModule } from './core/webhooks/webhooks.module';
 import { EmailModule } from './providers/email/email.module';
 import { OutreachEmailModule } from './modules/outreach-email/outreach-email.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { SyncModule } from './modules/sync';
 import { SEND_THROTTLE, KILL_SWITCH } from './modules/outreach-email/ports';
 import { SOURCE_MODULE as OUTREACH_EMAIL_SOURCE_MODULE } from './modules/outreach-email/send.service';
 import { ThrottleServiceAdapter, KillSwitchAdapter } from './wiring/outreach-email-adapters';
@@ -56,6 +57,8 @@ class HealthController {
     EmailModule,
     OutreachEmailModule,
     DashboardModule,
+    // §5.5 — order/payment sync, the shared base M5/M6/M7/M8 read from.
+    SyncModule,
   ],
   controllers: [HealthController],
   providers: [
